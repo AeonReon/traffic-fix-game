@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="theme-color" content="#f7f1e6" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="description" content="Traffic Flow — redesign the real Fuengirola interchange. Drag roads, add roundabouts and bridges, keep the cars moving." />
+<title>Traffic Flow — Fuengirola</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%23f7f1e6'/><circle cx='32' cy='32' r='13' fill='none' stroke='%23db6d51' stroke-width='5'/><rect x='4' y='28' width='22' height='8' rx='4' fill='%232d3242'/><rect x='38' y='28' width='22' height='8' rx='4' fill='%232d3242'/></svg>" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+  <canvas id="stage"></canvas>
+
+  <div id="splash" class="overlay">
+    <div class="splash-card">
+      <h1>Traffic Flow</h1>
+      <p class="sub">Fuengirola · A-7 Interchange</p>
+      <p class="blurb">The traffic is backing up. Redesign the real Fuengirola road network — drag new roads, add roundabouts and signals, build bridges — to keep the cars flowing as demand ramps up.</p>
+      <button id="btn-start" class="primary">Start</button>
+      <p class="hint">Tap / click anywhere on a road to start. Drag with "Add road" to build.</p>
+    </div>
+  </div>
+
+  <div id="hud" class="panel hidden">
+    <div class="hud-left">
+      <div class="stat">
+        <span class="k">Delivered</span>
+        <span id="m-done" class="v">0</span>
+      </div>
+      <div class="stat">
+        <span class="k">Flow</span>
+        <span id="m-flow" class="v">0<span class="u">/min</span></span>
+      </div>
+      <div class="stat">
+        <span class="k">Demand</span>
+        <span id="m-demand" class="v">1<span class="u">×</span></span>
+      </div>
+    </div>
+    <div class="jam-meter-wrap">
+      <div class="jam-meter-label">Jam</div>
+      <div class="jam-meter">
+        <div id="jam-fill" class="jam-fill"></div>
+      </div>
+    </div>
+    <div class="hud-right">
+      <button id="btn-pause" class="icon-btn" title="Pause (space)">⏸</button>
+    </div>
+  </div>
+
+  <div id="toolbar" class="panel hidden">
+    <button class="tool" data-tool="road">
+      <div class="tool-icon">━</div>
+      <div class="tool-label">Road</div>
+    </button>
+    <button class="tool" data-tool="bridge">
+      <div class="tool-icon">⌒</div>
+      <div class="tool-label">Bridge</div>
+    </button>
+    <button class="tool" data-tool="roundabout">
+      <div class="tool-icon">◯</div>
+      <div class="tool-label">Roundabout</div>
+    </button>
+    <button class="tool" data-tool="light">
+      <div class="tool-icon">🚦</div>
+      <div class="tool-label">Signal</div>
+    </button>
+    <button class="tool" data-tool="erase">
+      <div class="tool-icon">✕</div>
+      <div class="tool-label">Erase</div>
+    </button>
+  </div>
+
+  <div id="gameover" class="overlay hidden">
+    <div class="splash-card">
+      <h1 id="go-title">Gridlock!</h1>
+      <p class="blurb" id="go-message">The queues got out of hand.</p>
+      <div class="big-number"><span id="go-score">0</span><span class="u">cars delivered</span></div>
+      <button id="btn-retry" class="primary">Try again</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+</div>
+
+<script src="js/game.js"></script>
+</body>
+</html>

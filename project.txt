@@ -1,0 +1,32 @@
+# Traffic Flow — Fuengirola
+
+Mini-Motorways-inspired traffic game built on the real Fuengirola A-7 / N-340
+road skeleton. One scenario, one goal: keep the jam meter from maxing out as
+demand ramps.
+
+## Play
+Just open index.html via any web server:
+  python3 -m http.server 8000
+Visit http://localhost:8000/
+
+Or live: https://traffic-flow-game.vercel.app  (filled in after deploy)
+
+## How it's made
+- Map data: OSM fetched once via scripts/prep.js, simplified (Douglas-Peucker
+  at 3m tol), filtered to the main skeleton, baked as data/fuengirola.json
+  (~6 KB). Shipped with the app — no live fetch at runtime.
+- Sim: IDM car-following, simple priority/signal junction rules.
+- Render: Canvas 2D with warm pastel palette.
+- No build step. Pure HTML/CSS/JS.
+
+## To refresh the map
+  node scripts/prep.js           # fetches fresh OSM
+  USE_CACHED=1 node scripts/prep.js   # reprocess from cached raw data
+
+## File layout
+  index.html            # structure
+  style.css             # styling
+  js/game.js            # everything: sim + render + interact + loop
+  data/fuengirola.json  # baked map
+  scripts/prep.js       # one-shot data builder
+  vercel.json
