@@ -67,6 +67,12 @@ mechanic choice.
   (spoiler: persistence).
 - **`docs/research/visual-direction.md`** — flat-vector aesthetic defended,
   palette codified, per-building shape sketches, rendering order.
+- **`docs/research/design-pack.md`** — the *execution* spec for the visual
+  polish pass. Prescriptive: exact dimensions, colours, strokes, shadows,
+  motion timings. Seven implementation passes (silhouette → ground →
+  life → atmosphere → decoration → chrome → juice) that together take
+  the game from prototype to shipped. Start here when you're ready to
+  "make it look like a proper game".
 - **`docs/research/sound.md`** — Web Audio-only SFX spec, ambient pad
   recipe, triggers, mute/persistence. CC sources listed for fallback.
 

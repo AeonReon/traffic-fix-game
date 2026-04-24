@@ -53,6 +53,12 @@ Opinionated, sourced. Each ends with a prioritised "what to pull in" list.
 - **`research/visual-direction.md`** — flat vector, warm-pastel,
   procedural Canvas-2D (no sprite pipeline). Palette codified; per-
   building shape sketches included; explicit "don't" list.
+- **`research/design-pack.md`** — the execution spec for polishing to
+  Mini-Motorways level. Exact dimensions, colours, strokes, shadows,
+  motion timings for every element (cars, each building type, roads,
+  junctions, gates, effects). Seven implementation passes with time
+  estimates. When the build session is ready to "make it look like a
+  real game", open this and walk top-to-bottom.
 - **`research/sound.md`** — Web-Audio-only spec. 5 SFX (delivery
   chime pitched by building type, pad, click, jam tone, gate open)
   with runnable JS snippets. No audio files needed for v1.
