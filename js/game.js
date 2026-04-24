@@ -640,9 +640,9 @@
       b.timer = (b.timer || 0) + dt;
       while (b.timer >= interval) {
         b.timer -= interval;
-        b.queue.push({ waitingSince: state.time });
+        // Cap the queue so it can't grow forever when a house has no path.
+        if (b.queue.length < 12) b.queue.push({ waitingSince: state.time });
       }
-      // Try to dispatch queued cars this tick.
       tryDispatchFromQueue(b);
     }
 
@@ -1133,16 +1133,15 @@
 
     if (isTap && state.tool === 'erase') {
       const world = s2w(p.startX, p.startY);
-      const edge = findNearestEdge(world.x, world.y, 20);
+      const edge = findNearestEdge(world.x, world.y, 24 / state.view.scale);
       if (!edge) return toast('Tap a road to erase');
-      if (!edge.custom) return toast('Only roads you added can be erased');
       eraseEdgeById(edge);
       toast('Road erased');
     }
 
     if (isTap && state.tool === 'roundabout') {
       const world = s2w(p.startX, p.startY);
-      const node = findNearestNode(world.x, world.y, 34);
+      const node = findNearestNode(world.x, world.y, 38 / state.view.scale);
       if (!node) return toast('Tap a junction to convert');
       const res = makeRoundabout(node.id);
       if (!res.ok) return toast(res.reason);
