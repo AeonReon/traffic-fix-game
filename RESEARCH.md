@@ -38,7 +38,7 @@ Two Claude sessions are working in parallel on the same folder:
 
 **STATUS (update when shipped):**
 
-- [ ] Stage A — Typed buildings (placeable, distinct behaviour)
+- [~] Stage A — Typed buildings *(A.1 shipped v12: House/Shop/Mall placement + visuals; weighted dispatch, pressure indicators, upgrades still pending — see next-features.md)*
 - [ ] Stage B — Demand curve & rush hour
 - [ ] Stage C — Traffic control upgrades
 - [ ] Stage D — Weekly progression & scoring
@@ -46,6 +46,29 @@ Two Claude sessions are working in parallel on the same folder:
 - [ ] Stage F — Terrain & pre-built layouts
 - [ ] Stage G — Audio
 - [ ] Stage H — Real-world mode (OSM import, long horizon)
+
+## Deep-dive research docs
+
+These live under `docs/research/` — opinionated, sourced references that
+feed the Stages above. Read them when you need context on *why* a stage
+is designed the way it is, or before committing to a visual / audio /
+mechanic choice.
+
+- **`docs/research/next-features.md`** — the ranked prioritisation. Start
+  here if you're picking the next feature. Supersedes the Stage order
+  where it disagrees (it orders by player-impact, not architectural
+  dependency).
+- **`docs/research/mini-motorways.md`** — full MM mechanics breakdown +
+  what we're pulling in (ranked) and what we're deliberately rejecting.
+- **`docs/research/mini-metro-and-others.md`** — lessons from Mini Metro,
+  Cities Skylines, SimCity, Tropico. Each with a call on what to steal.
+- **`docs/research/fun.md`** — the 10-minute core loop, five specific
+  "aha moments" to design around, and the hook that brings players back
+  (spoiler: persistence).
+- **`docs/research/visual-direction.md`** — flat-vector aesthetic defended,
+  palette codified, per-building shape sketches, rendering order.
+- **`docs/research/sound.md`** — Web Audio-only SFX spec, ambient pad
+  recipe, triggers, mute/persistence. CC sources listed for fallback.
 
 ---
 
