@@ -38,34 +38,36 @@ Two Claude sessions are working in parallel on the same folder:
 
 **STATUS (update when shipped):**
 
-- [x] Stage A — Typed buildings *(A.1 shipped v12: House/Shop/Mall placement + visuals; A.2 shipped v13: weighted dispatch + pressure rings. Building upgrades deferred to Stage D as an upgrade-pool entry.)*
-- [x] **next-features #1 — Persistence** shipped v14. Known bug P1: loadState is defined but never called on boot, so every refresh wipes the city. See `docs/testing/known-issues.md`. Fix blocks the feature from actually working.
+- [x] Stage A — Typed buildings *(A.1 v12: placement + visuals; A.2 v13: weighted dispatch + pressure rings. A.3 v16: houses-as-origins, per-building colour variation.)*
+- [x] **next-features #1 — Persistence** shipped v14 *(save + Continue vs Start-fresh splash). Playtest P1 "loadState never called" is likely resolved by v14 but needs re-verification (playtest last pass was v13).*
+- [x] **next-features #4 — One-way road tool** shipped v17 (keyboard `3`, chevron rendering, respects routing).
+- [x] **Score system** shipped v18 — points per event (Mall +3, Shop +2, House +1, delivery +1), best-score persistence.
+- [x] **Stage E — Visual polish** *walking* — v15 (oriented cars + delivery bursts), v17 (SVG toolbar icons), v18 (colour-coded gates + ambient decor + new favicon), v19 (pastel car palette + queue colour-tinting + coloured HUD).
 - [ ] Stage B — Demand curve & rush hour
-- [ ] Stage C — Traffic control upgrades
-- [ ] Stage D — Weekly progression & scoring
-- [>] **Stage E — Visual polish** *(next up — open `docs/research/design-pack.md` and walk Pass A onward. Goal: cars look like cars, buildings have distinct silhouettes. Target quality: Mini Motorways or better.)*
-- [ ] Stage F — Terrain & pre-built layouts
-- [ ] Stage G — Audio
+- [ ] Stage C — Traffic control upgrades (traffic lights, highway)
+- [ ] Stage D — Weekly progression & scoring loop (upgrade draft)
+- [ ] Stage E remaining passes — map frame (design-pack §2), day/night tint (§10), sound (§12), soft goals, pause button, flow sparkline — see `optimization.md` for the next-ship priorities.
+- [ ] Stage F — Terrain & pre-built scenarios
+- [ ] Stage G — Audio (specced in `sound.md`, not yet shipped)
 - [ ] Stage H — Real-world mode (OSM import, long horizon)
 
 ## Playtest signal (from `docs/testing/`)
 
-Playtest session is live and has reviewed through v13. Current state:
-**14 bugs filed** — 2×P1, 6×P2, 4×P3, 2×P4. The two P1s block correctness:
+Playtest session last ran at v13. Build has shipped v14-v19 since —
+**6-version QA backlog**. The known-issues list is stale:
 
-- **P1 Persistence is write-only** — `loadState` exists but no caller.
-  Every refresh wipes the city despite the save blob being written
-  faithfully. Fixing this requires ~20 lines in boot: call
-  `hasSavedCity()` → call `loadState()` → set `state.started = true`.
-  Also fix the sibling P2: `loadState` doesn't set `state.started`, so
-  post-load edits don't persist either.
-- **P1 Queue dispatch is LIFO** — `tryDispatchFromQueue` uses
-  `entry.queue.pop()` instead of `.shift()`. Dormant today (wait-time
-  isn't displayed), will bite the moment a "longest wait" metric ships.
-  One-character fix.
+- P1 **Persistence is write-only** — `loadState` exists but no caller.
+  *Almost certainly resolved by v14* ("Boot detects a saved city and
+  flips the splash to Continue / Start fresh" per NOTES). Needs
+  re-verification; close if fixed.
+- P1 **Queue dispatch is LIFO** — `entry.queue.pop()` instead of
+  `.shift()`. Unknown whether fixed. Playtest needs to check.
+- 6 × P2 + 4 × P3 + 2 × P4 also pending re-verification.
 
-Neither blocks the visual-polish pass. Suggested ordering for the next
-build session: fix both P1s (≤ 30 min), then start design-pack Pass A.
+**Action:** next playtest session should first catch up on v14-v19
+diffs and close/reopen issues accordingly, then resume forward
+review. This is codified in `optimization.md` §B1 — the new
+protocol is "playtest auto-runs on every ship" rather than ad-hoc.
 
 ## Deep-dive research docs
 
@@ -95,6 +97,12 @@ mechanic choice.
   "make it look like a proper game".
 - **`docs/research/sound.md`** — Web Audio-only SFX spec, ambient pad
   recipe, triggers, mute/persistence. CC sources listed for fallback.
+- **`docs/research/optimization.md`** — **enjoyment + development**
+  optimisation. Nine player-side upgrades ranked by impact (top 5:
+  pause button, flow sparkline, sound, soft-goal toasts, day/night
+  tint) and eight dev-workflow upgrades (top: playtest auto-runs on
+  every ship). Currently the most actionable research doc for the
+  next few weeks.
 
 ---
 

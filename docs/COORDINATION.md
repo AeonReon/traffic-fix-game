@@ -65,6 +65,14 @@ Opinionated, sourced. Each ends with a prioritised "what to pull in" list.
   junctions, gates, effects). Seven implementation passes with time
   estimates. When the build session is ready to "make it look like a
   real game", open this and walk top-to-bottom.
+- **`research/optimization.md`** — enjoyment + development
+  optimisations ranked by impact. Player-side top 5: explicit pause,
+  60s flow sparkline with peak callout, sound pass, soft-goal
+  milestone toasts, day/night tint (~6h total). Developer-side top
+  3: playtest auto-runs on every ship (protocol change), research
+  sweeps NOTES each turn (protocol), one-feature-per-commit
+  discipline. Ship A1 (explicit Pause) first — 30 minutes, biggest
+  UX friction removed.
 - **`research/sound.md`** — Web-Audio-only spec. 5 SFX (delivery
   chime pitched by building type, pad, click, jam tone, gate open)
   with runnable JS snippets. No audio files needed for v1.
