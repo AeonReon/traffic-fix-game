@@ -95,8 +95,8 @@ category hasn't — they don't gate each other.
 ## Implementation sketch
 
 ```js
-// state additions
-state.milestonesSeen = new Set(JSON.parse(localStorage.getItem('tf:milestones') || '[]'));
+// state additions — hydrate from the active scenario's save blob
+state.milestonesSeen = new Set(activeSave.milestonesSeen || []);
 
 // one definition per milestone
 const MILESTONES = {
@@ -129,13 +129,22 @@ Call `checkMilestones()` at most **once per second** (not every
 frame) from `stepSim` — cheap because most `check` functions are
 O(1) and the `Set.has` lookup is O(1).
 
-### Persistence
+### Persistence (per-scenario)
 
-- Save the Set as a JSON array to `localStorage['tf:milestones']`
-  with the same versioned schema as the save system.
-- Clear on "Start fresh" but **not** on scenario switch (per-save
-  scope, shared across scenarios within the same save — or
-  re-architect if scenarios get their own saves later).
+**Scope:** milestones are tracked **per scenario**, not globally
+per-player. First mall in Plains should not block first mall in
+Coastal — the discovery moment matters each time.
+
+- Store `milestonesSeen` (array) inside each scenario's save blob
+  at `localStorage['traffic-flow:v1:<scenarioId>']`. Not a separate
+  key.
+- On load, hydrate `state.milestonesSeen` from the active save.
+- On save, serialise `Array.from(state.milestonesSeen)` back in.
+- "Reset this scenario" wipes that scenario's milestones along with
+  the rest of the save. Other scenarios are untouched.
+- When `scenarios.md` S2 ships, migration code should delete any
+  legacy `localStorage['tf:milestones']` key — it's per-player and
+  no longer used.
 
 ### Toast visual
 

@@ -73,6 +73,15 @@ Opinionated, sourced. Each ends with a prioritised "what to pull in" list.
   sweeps NOTES each turn (protocol), one-feature-per-commit
   discipline. Ship A1 (explicit Pause) first — 30 minutes, biggest
   UX friction removed.
+- **`research/milestones.md`** — 30 soft-goal milestone toasts across
+  4 tiers (first-time, scale, craft, rare), per-scenario persistence,
+  grandfathering for existing saves, 5 design rules for future
+  additions. Build session pastes `MILESTONES` object directly.
+- **`research/scenarios.md`** — scenario picker with four starter
+  maps (Plains / Coastal / Two Districts / Ring), JSON schema at
+  `data/scenarios.json`, terrain rendering rules (river, park, sea),
+  per-scenario save slots with legacy-save migration, 3-ship
+  implementation sequence. Biggest replay lever on the roadmap.
 - **`research/sound.md`** — Web-Audio-only spec. 5 SFX (delivery
   chime pitched by building type, pad, click, jam tone, gate open)
   with runnable JS snippets. No audio files needed for v1.

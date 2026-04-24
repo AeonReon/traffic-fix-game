@@ -108,6 +108,15 @@ mechanic choice.
   toast visual + animation, persistence schema, grandfathering for
   existing saves, design rules. Ready to paste: build session can
   lift the `MILESTONES` object directly.
+- **`docs/research/scenarios.md`** — full spec for the scenario
+  picker (optimization.md A8 / RESEARCH Stage F). JSON schema,
+  four concrete starting scenarios (Plains / Coastal / Two
+  Districts / Ring), terrain rendering rules (river needs Bridge,
+  park is impassable, sea is impassable), per-scenario save slots
+  with migration from legacy single-save, 3-ship implementation
+  sequence (S1 scaffolding → S2 picker UI → S3 reset flow),
+  acceptance criteria per ship. The single biggest replayability
+  lever on the roadmap.
 
 ---
 
