@@ -1230,14 +1230,14 @@
   function render() {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // Paper-warm radial gradient — lighter near centre, slightly richer at
-    // the corners. Gives the bg depth without competing with game elements.
+    // Pastel-sage parkland gradient — feels like grass without screaming
+    // green. Lighter near centre, a little richer at the corners.
     const cw = canvas.width, ch = canvas.height;
     const grad = ctx.createRadialGradient(cw / 2, ch / 2, 0,
                                           cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
-    grad.addColorStop(0.0, '#faf0d9');
-    grad.addColorStop(0.55, '#f2e3c1');
-    grad.addColorStop(1.0, '#e8d6ae');
+    grad.addColorStop(0.0, '#ebefd4');   // soft sage cream
+    grad.addColorStop(0.55, '#dce4bd');  // pastel green
+    grad.addColorStop(1.0, '#c7d3a4');   // deeper sage at the edges
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, cw, ch);
     ctx.scale(state.view.dpr, state.view.dpr);
@@ -2337,7 +2337,13 @@
     }
     const pop = state.blocks.reduce((n, b) => n + (b.type === 'house' ? 2 : 0), 0);
     document.getElementById('m-pop').textContent = pop;
-    const ratePerMin = state.time > 0 ? (state.delivered / state.time) * 60 : 0;
+    // Flow = average of the last 10 seconds of sparkline samples.
+    // Avoids the "cumulative-since-load spike" bug that showed 3692/min
+    // instantly after loading a saved city with lots of past deliveries.
+    const recent = state.flowSamples.slice(-10);
+    const ratePerMin = recent.length
+      ? recent.reduce((a, b) => a + b, 0) / recent.length
+      : 0;
     document.getElementById('m-flow').innerHTML = `${Math.round(ratePerMin)}<span class="u">/min</span>`;
     drawFlowSpark();
     // Demand label updated by slider handler, not here.

@@ -267,8 +267,9 @@ html, body {
 }
 .tool.active .tool-icon { color: white !important; }
 
-/* Each tool gets a tinted icon so the toolbar has colour at rest,
-   matching the thing the tool produces in the world. */
+/* Each tool gets a tinted icon AND a matching coloured border so the
+   toolbar has colour at rest, tied to what the tool produces in the
+   world. Active-state overrides the border with the main accent. */
 .tool[data-tool="road"]       .tool-icon { color: #4a5164; }
 .tool[data-tool="bridge"]     .tool-icon { color: #8a68b0; }
 .tool[data-tool="oneway"]     .tool-icon { color: #3a7ca5; }
@@ -278,7 +279,27 @@ html, body {
 .tool[data-tool="mall"]       .tool-icon { color: #4a73a5; }
 .tool[data-tool="erase"]      .tool-icon { color: #c24a3d; }
 #btn-undo                     .tool-icon { color: #6c7380; }
-.tool-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* Coloured borders. 2px so they read clearly. Active state in the
+   .tool.active rule above still overrides border-color to the orange
+   accent, so selection remains obvious. */
+.tool { border-width: 2px; }
+.tool[data-tool="road"]       { border-color: rgba(74, 81, 100, 0.45); }
+.tool[data-tool="bridge"]     { border-color: rgba(138, 104, 176, 0.4); }
+.tool[data-tool="oneway"]     { border-color: rgba(58, 124, 165, 0.42); }
+.tool[data-tool="roundabout"] { border-color: rgba(90, 142, 104, 0.45); }
+.tool[data-tool="house"]      { border-color: rgba(176, 133, 69, 0.48); }
+.tool[data-tool="shop"]       { border-color: rgba(199, 74, 61, 0.38); }
+.tool[data-tool="mall"]       { border-color: rgba(74, 115, 165, 0.42); }
+.tool[data-tool="erase"]      { border-color: rgba(194, 74, 61, 0.38); }
+#btn-undo                     { border-color: rgba(108, 115, 128, 0.35); }
+.tool-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Paused overlay — subtle cream wash + centered "Paused" pill. Doesn't block
    interactions so the player can still edit roads/buildings while paused. */

@@ -5,7 +5,7 @@ Running notes so we don't lose direction between sessions.
 > **What's next:** see `RESEARCH.md` (the other session's roadmap).
 > **Coordination rules:** see `docs/COORDINATION.md`.
 
-## Current features (what the player can do today — v24)
+## Current features (what the player can do today — v25)
 
 Single source of truth for "what this game actually is right now."
 Update this list whenever a user-visible feature ships or is cut.
@@ -83,6 +83,20 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v25 (pastel-green map, coloured button borders, Flow fix)** —
+  Canvas background shifted from warm cream to pastel sage-green
+  radial gradient (`#ebefd4` centre → `#c7d3a4` edges). The map now
+  reads as parkland, not a blank page. Each toolbar button gets a
+  **coloured border** matching its icon tint (House gold, Shop red,
+  Mall blue, Road slate, Bridge lavender, One-way blue, Roundabout
+  green, Erase red) so the toolbar has colour at rest. Active state
+  still swaps to full orange to be unmissable. Labels got
+  `text-overflow: ellipsis` so "ROUNDABOUT" on a narrow iPhone no
+  longer bleeds into neighbouring buttons. **Flow HUD bug fix:** the
+  per-minute number was computed as `delivered / time * 60`
+  cumulative since load, which spiked to thousands immediately after
+  restoring a saved city. Now uses the average of the last 10
+  sparkline samples — shows what's actually happening *right now*.
 - **2026-04-24 — v24 (A5: day/night tint + stars)** — 90-second
   cycle loops the whole scene through dawn (cool cyan, α 0.15) →
   clear midday (α 0) → warm dusk (orange, α 0.22) → deep-blue
