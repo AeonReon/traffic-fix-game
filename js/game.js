@@ -204,6 +204,48 @@
     return best;
   }
 
+  // Return { edge, x, y } of the closest point lying on any edge within snapR
+  // pixels, or null. Used for T-junction snapping.
+  function findNearestEdgePoint(x, y, snapR) {
+    let best = null, bestD = snapR * snapR;
+    for (const e of state.edges) {
+      if (e.id % 2 === 0) continue;
+      const pts = e.shape;
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1], b = pts[i];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const L2 = dx * dx + dy * dy || 1e-6;
+        let t = ((x - a.x) * dx + (y - a.y) * dy) / L2;
+        t = Math.max(0, Math.min(1, t));
+        const qx = a.x + dx * t, qy = a.y + dy * t;
+        const d = (qx - x) ** 2 + (qy - y) ** 2;
+        if (d < bestD) { bestD = d; best = { edge: e, x: qx, y: qy }; }
+      }
+    }
+    return best;
+  }
+
+  // For live preview: would this straight line geometrically cross any existing
+  // non-bridge edge (ignoring those the drag's endpoints already snap to)?
+  function lineWouldCross(aPt, bPt, dragData) {
+    const skipEdges = new Set();
+    if (dragData.snapStartEdge) skipEdges.add(dragData.snapStartEdge.edge);
+    if (dragData.snapEndEdge)   skipEdges.add(dragData.snapEndEdge.edge);
+
+    for (const e of state.edges) {
+      if (e.bridge) continue;
+      if (e.id % 2 === 0) continue;
+      if (skipEdges.has(e)) continue;
+      if (dragData.snapStart && (e.from === dragData.snapStart.id || e.to === dragData.snapStart.id)) continue;
+      if (dragData.snapEnd   && (e.from === dragData.snapEnd.id   || e.to === dragData.snapEnd.id))   continue;
+      const pts = e.shape;
+      for (let i = 1; i < pts.length; i++) {
+        if (segIntersect(aPt, bPt, pts[i - 1], pts[i])) return true;
+      }
+    }
+    return false;
+  }
+
   // ================================================================
   // Road building
   // ================================================================
@@ -312,50 +354,53 @@
     return newNode;
   }
 
-  function addRoad(startPt, endPt, opts = {}) {
+  // addRoad takes resolved endpoint objects from the drag handler:
+  //   { node: Node }        — endpoint snapped to an existing node
+  //   { edgePoint: {...} }  — endpoint snapped to a point on an existing road
+  // Bridges ignore crossings, regular roads reject crossings.
+  function addRoad(startData, endData, opts = {}) {
     const isBridge = !!opts.isBridge;
-    const SNAP = 28;
 
-    const startNode = findNearestNode(startPt.x, startPt.y, SNAP) || makeNode(startPt.x, startPt.y);
-    const endNode   = findNearestNode(endPt.x,   endPt.y,   SNAP) || makeNode(endPt.x, endPt.y);
-    if (startNode.id === endNode.id) return { ok: false, reason: 'start == end' };
+    if (startData.edgePoint && endData.edgePoint &&
+        startData.edgePoint.edge === endData.edgePoint.edge) {
+      return { ok: false, reason: 'Pick a different road for the other end' };
+    }
+
+    function resolve(data) {
+      if (data.node) return data.node;
+      if (data.edgePoint) return splitEdgeAtPoint(data.edgePoint.edge, data.edgePoint.x, data.edgePoint.y);
+      return null;
+    }
+    const startNode = resolve(startData);
+    if (!startNode) return { ok: false, reason: 'Start on a road or building' };
+    const endNode = resolve(endData);
+    if (!endNode) return { ok: false, reason: 'End on a road or building' };
+    if (startNode.id === endNode.id) return { ok: false, reason: 'Start and end are the same spot' };
 
     const shape = [
       { x: startNode.x, y: startNode.y },
       { x: endNode.x,   y: endNode.y }
     ];
-    if (polyLen(shape) < 40) return { ok: false, reason: 'too short' };
+    if (polyLen(shape) < 40) return { ok: false, reason: 'Too short' };
 
+    // Regular roads cannot cross existing non-bridge roads. Use Bridge for that.
     if (!isBridge) {
-      // Find crossings with existing non-bridge edges and split at each.
-      const crossings = [];
       for (const e of state.edges) {
         if (e.bridge) continue;
-        if (e.id % 2 === 0) continue; // dedupe against twins
+        if (e.id % 2 === 0) continue;
+        if (e.from === startNode.id || e.from === endNode.id ||
+            e.to === startNode.id   || e.to === endNode.id) continue;
         const pts = e.shape;
         for (let i = 1; i < pts.length; i++) {
-          const hit = segIntersect(shape[0], shape[1], pts[i - 1], pts[i]);
-          if (hit) crossings.push({ edge: e, hit });
+          if (segIntersect(shape[0], shape[1], pts[i - 1], pts[i])) {
+            return { ok: false, reason: 'Use Bridge to cross an existing road' };
+          }
         }
       }
-      crossings.sort((a, b) => a.hit.t - b.hit.t);
-      const waypoints = [];
-      for (const cr of crossings) {
-        waypoints.push(splitEdgeAtPoint(cr.edge, cr.hit.x, cr.hit.y));
-      }
-      const chain = [startNode, ...waypoints, endNode];
-      for (let i = 0; i + 1 < chain.length; i++) {
-        makeEdge(chain[i], chain[i + 1], { custom: true });
-      }
-    } else {
-      // Bridge: single straight edge, ignores crossings.
-      makeEdge(startNode, endNode, { custom: true, bridge: true, shape });
     }
 
+    makeEdge(startNode, endNode, { custom: true, bridge: isBridge, shape });
     rebuildAdjacency();
-    // Don't reroute in-flight cars — they keep their current path (with the
-    // tail edge spliced in by splitEdgeAtPoint). Newly spawned cars will
-    // automatically use whatever the shortest path is on the new network.
     return { ok: true };
   }
 
@@ -862,30 +907,50 @@
 
   function drawDragPreview() {
     if (!state.dragging) return;
-    const a = state.dragging.snapStart
-      ? { x: state.dragging.snapStart.x, y: state.dragging.snapStart.y }
-      : state.dragging.startWorld;
-    const b = state.dragging.snapEnd
-      ? { x: state.dragging.snapEnd.x, y: state.dragging.snapEnd.y }
-      : state.dragging.cursorWorld;
-    if (!b) return;
-    const pA = w2s(a.x, a.y);
-    const pB = w2s(b.x, b.y);
-    const isBridge = state.dragging.isBridge;
-    // Glow
-    ctx.strokeStyle = isBridge ? 'rgba(160, 101, 195, 0.55)' : 'rgba(219, 109, 81, 0.55)';
+    const d = state.dragging;
+    const aPt = d.snapStart ? { x: d.snapStart.x, y: d.snapStart.y }
+              : d.snapStartEdge ? { x: d.snapStartEdge.x, y: d.snapStartEdge.y }
+              : d.startWorld;
+    const bPt = d.snapEnd ? { x: d.snapEnd.x, y: d.snapEnd.y }
+              : d.snapEndEdge ? { x: d.snapEndEdge.x, y: d.snapEndEdge.y }
+              : d.cursorWorld;
+    if (!bPt) return;
+
+    const startOk = !!(d.snapStart || d.snapStartEdge);
+    const endOk   = !!(d.snapEnd   || d.snapEndEdge);
+    const anchored = startOk && endOk;
+    const wouldCross = !d.isBridge && anchored && lineWouldCross(aPt, bPt, d);
+    const invalid = !anchored || wouldCross;
+
+    const pA = w2s(aPt.x, aPt.y);
+    const pB = w2s(bPt.x, bPt.y);
+
+    const glow = invalid ? 'rgba(194, 74, 61, 0.45)'
+               : d.isBridge ? 'rgba(160, 101, 195, 0.55)'
+               : 'rgba(219, 109, 81, 0.55)';
+    const inner = invalid ? '#c24a3d'
+                : d.isBridge ? '#a065c3'
+                : '#db6d51';
+
+    ctx.strokeStyle = glow;
     ctx.lineWidth = 28 * state.view.scale;
     ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(pA.sx, pA.sy); ctx.lineTo(pB.sx, pB.sy); ctx.stroke();
-    // Inner
-    ctx.strokeStyle = isBridge ? '#a065c3' : '#db6d51';
+
+    ctx.strokeStyle = inner;
     ctx.lineWidth = 18 * state.view.scale;
+    if (invalid) ctx.setLineDash([12 * state.view.scale, 10 * state.view.scale]);
     ctx.beginPath(); ctx.moveTo(pA.sx, pA.sy); ctx.lineTo(pB.sx, pB.sy); ctx.stroke();
-    // Snap dots
-    ctx.fillStyle = isBridge ? '#a065c3' : '#db6d51';
-    ctx.beginPath(); ctx.arc(pA.sx, pA.sy, 6, 0, Math.PI * 2); ctx.fill();
-    if (state.dragging.snapEnd) {
-      ctx.beginPath(); ctx.arc(pB.sx, pB.sy, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = inner;
+    if (startOk) {
+      ctx.beginPath();
+      ctx.arc(pA.sx, pA.sy, 6, 0, Math.PI * 2); ctx.fill();
+    }
+    if (endOk) {
+      ctx.beginPath();
+      ctx.arc(pB.sx, pB.sy, 6, 0, Math.PI * 2); ctx.fill();
     }
   }
 
@@ -959,12 +1024,15 @@
 
     const world = s2w(mx, my);
     if (state.tool === 'road' || state.tool === 'bridge') {
-      const snap = findNearestNode(world.x, world.y, 34);
+      const nodeSnap = findNearestNode(world.x, world.y, 38);
+      const edgeSnap = !nodeSnap ? findNearestEdgePoint(world.x, world.y, 22) : null;
       state.dragging = {
         startWorld: world,
-        snapStart: snap,
+        snapStart: nodeSnap,
+        snapStartEdge: edgeSnap,
         cursorWorld: world,
         snapEnd: null,
+        snapEndEdge: null,
         isBridge: state.tool === 'bridge'
       };
     } else {
@@ -994,7 +1062,10 @@
     const world = s2w(mx, my);
     if (state.dragging) {
       state.dragging.cursorWorld = world;
-      state.dragging.snapEnd = findNearestNode(world.x, world.y, 34);
+      const nodeSnap = findNearestNode(world.x, world.y, 38);
+      const edgeSnap = !nodeSnap ? findNearestEdgePoint(world.x, world.y, 22) : null;
+      state.dragging.snapEnd = nodeSnap;
+      state.dragging.snapEndEdge = edgeSnap;
     } else if (state.panActive && p) {
       const dx = (mx - state.panFrom.mx) / state.view.scale;
       const dy = (my - state.panFrom.my) / state.view.scale;
@@ -1018,12 +1089,21 @@
 
     if (state.dragging) {
       const d = state.dragging;
-      const end = d.snapEnd ? { x: d.snapEnd.x, y: d.snapEnd.y } : d.cursorWorld;
-      const start = d.snapStart ? { x: d.snapStart.x, y: d.snapStart.y } : d.startWorld;
       state.dragging = null;
-      const dist = Math.hypot(end.x - start.x, end.y - start.y);
-      if (dist < 30) return;
-      const res = addRoad(start, end, { isBridge: d.isBridge });
+      // Endpoints must snap to either a node or an existing road — otherwise
+      // the drawn road would have a floating dead-end that nothing can reach.
+      const startData = d.snapStart ? { node: d.snapStart }
+                      : d.snapStartEdge ? { edgePoint: d.snapStartEdge }
+                      : null;
+      const endData   = d.snapEnd ? { node: d.snapEnd }
+                      : d.snapEndEdge ? { edgePoint: d.snapEndEdge }
+                      : null;
+      if (!startData) { toast('Start at a building or on a road'); return; }
+      if (!endData)   { toast('End at a building or on a road');   return; }
+      const startPt = startData.node ? startData.node : startData.edgePoint;
+      const endPt   = endData.node   ? endData.node   : endData.edgePoint;
+      if (Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y) < 30) return;
+      const res = addRoad(startData, endData, { isBridge: d.isBridge });
       if (res.ok) toast(d.isBridge ? 'Bridge built' : 'Road built');
       else toast(res.reason);
       return;
