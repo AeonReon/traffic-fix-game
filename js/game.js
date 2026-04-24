@@ -29,10 +29,10 @@
       { id: 3, kind: 'house', color: 1, x:  90, y: 520 },
       { id: 4, kind: 'shop',  color: 1, x: 1110, y: 520 }
     ],
-    // Pre-built starter roads so the screen is alive from frame 1.
+    // Only the coral pair has a pre-built road. The teal pair is waiting for
+    // the player to connect — that's the tutorial moment.
     starterRoads: [
-      { a: { x:  90, y: 280 }, b: { x: 1110, y: 280 } },
-      { a: { x:  90, y: 520 }, b: { x: 1110, y: 520 } }
+      { a: { x:  90, y: 280 }, b: { x: 1110, y: 280 } }
     ]
   };
 
@@ -306,6 +306,108 @@
 
     rebuildAdjacency();
     // Recompute routes for undelivered cars so they can take the new path if shorter.
+    refreshRoutes();
+    return { ok: true };
+  }
+
+  function angleDiff(a, b) {
+    let d = b - a;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d <= -Math.PI) d += 2 * Math.PI;
+    return d;
+  }
+
+  function makeRoundabout(nodeId, radius = 50) {
+    const node = state.nodes.get(nodeId);
+    if (!node) return { ok: false, reason: 'no node' };
+
+    // Collect edges touching this node (both directions).
+    const touching = state.edges.filter(e => e.from === nodeId || e.to === nodeId);
+    if (touching.length < 3) return { ok: false, reason: 'need 3+ roads' };
+
+    // Direction vector AWAY from the node for each touching edge.
+    function dirAway(e) {
+      let dx, dy;
+      if (e.from === nodeId) {
+        dx = e.shape[1].x - e.shape[0].x;
+        dy = e.shape[1].y - e.shape[0].y;
+      } else {
+        const n = e.shape.length;
+        dx = e.shape[n - 2].x - e.shape[n - 1].x;
+        dy = e.shape[n - 2].y - e.shape[n - 1].y;
+      }
+      const L = Math.hypot(dx, dy) || 1;
+      return { dx: dx / L, dy: dy / L };
+    }
+
+    // Group by bearing (a pair of twin edges shares the same direction).
+    const BUCKET = 0.35;
+    const groups = [];
+    for (const e of touching) {
+      const d = dirAway(e);
+      const bearing = Math.atan2(d.dy, d.dx);
+      let g = groups.find(g => Math.abs(angleDiff(g.bearing, bearing)) < BUCKET);
+      if (!g) { g = { bearing, dx: d.dx, dy: d.dy, edges: [] }; groups.push(g); }
+      g.edges.push(e);
+    }
+    if (groups.length < 3) return { ok: false, reason: 'approaches too close together' };
+
+    // Create one ring node per approach direction.
+    const ringNodes = groups.map(g => {
+      const rx = node.x + radius * g.dx;
+      const ry = node.y + radius * g.dy;
+      const rn = makeNode(rx, ry);
+      return { node: rn, bearing: g.bearing, edges: g.edges };
+    });
+
+    // Rewire the approach edges so they end at the ring node instead of the centre.
+    for (const rn of ringNodes) {
+      for (const e of rn.edges) {
+        if (e.from === nodeId) {
+          e.from = rn.node.id;
+          e.shape[0] = { x: rn.node.x, y: rn.node.y };
+        } else {
+          e.to = rn.node.id;
+          e.shape[e.shape.length - 1] = { x: rn.node.x, y: rn.node.y };
+        }
+        e.length = polyLen(e.shape);
+      }
+    }
+
+    // Counterclockwise on a y-down screen = descending bearing order.
+    ringNodes.sort((a, b) => b.bearing - a.bearing);
+
+    for (let i = 0; i < ringNodes.length; i++) {
+      const a = ringNodes[i].node;
+      const b = ringNodes[(i + 1) % ringNodes.length].node;
+      let angA = Math.atan2(a.y - node.y, a.x - node.x);
+      let angB = Math.atan2(b.y - node.y, b.x - node.x);
+      let delta = angB - angA;
+      if (delta <= -Math.PI) delta += 2 * Math.PI;
+      else if (delta > Math.PI) delta -= 2 * Math.PI;
+      if (delta < 0) delta += 2 * Math.PI;
+      const steps = 6;
+      const shape = [];
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const ang = angA + delta * t;
+        shape.push({ x: node.x + radius * Math.cos(ang), y: node.y + radius * Math.sin(ang) });
+      }
+      // One-way arc (no reverse twin — that's what makes it a roundabout).
+      state.edges.push({
+        id: state.nextEdgeId++,
+        from: a.id, to: b.id,
+        shape, length: polyLen(shape),
+        bridge: false, custom: true
+      });
+    }
+
+    // Remove the original centre node.
+    state.nodes.delete(nodeId);
+    // Kick any car whose route goes through the modified edges — rebuild fresh.
+    const modifiedIds = new Set(touching.map(e => e.id));
+    state.cars = state.cars.filter(c => !c.path.some(e => modifiedIds.has(e.id)));
+    rebuildAdjacency();
     refreshRoutes();
     return { ok: true };
   }
@@ -770,6 +872,7 @@
       if (e.key === 'Escape') state.dragging = null;
       if (e.key === '1') setTool('road');
       if (e.key === '2') setTool('bridge');
+      if (e.key === '3') setTool('roundabout');
       if (e.key === '5') setTool('erase');
     });
   }
@@ -884,6 +987,15 @@
       if (!edge.custom) return toast('Only roads you added can be erased');
       eraseEdgeById(edge);
       toast('Road erased');
+    }
+
+    if (isTap && state.tool === 'roundabout') {
+      const world = s2w(p.startX, p.startY);
+      const node = findNearestNode(world.x, world.y, 34);
+      if (!node) return toast('Tap a junction to convert');
+      const res = makeRoundabout(node.id);
+      if (!res.ok) return toast(res.reason);
+      toast('Roundabout built');
     }
   }
 
