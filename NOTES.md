@@ -9,6 +9,14 @@ Running notes so we don't lose direction between sessions.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v19 (colour, properly)** — Cars are a cheerful
+  pastel mix now (10 colours: coral / dusty blue / sage / amber /
+  lavender / rose / deep blue / honey / olive / plum) instead of
+  slate variations. Main visual lever — these things are what the
+  player watches. Entry-queue dots now match their gate's colour
+  (each gate already has its own pastel from v18) so a piling-up
+  queue reads as "North gate is backed up" at a glance. Coloured the
+  HUD values too: Score orange (was), People sage, Flow dusty blue.
 - **2026-04-24 — v18 (score system + colour + ambient life)** —
   Score is now the hero stat. Points per event: Mall visit +3, Shop
   visit +2, House visit +1, Delivery +1. Best score persists across

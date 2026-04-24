@@ -129,6 +129,8 @@ html, body {
 .stat .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-soft); font-weight: 700; }
 .stat .v { font-size: 20px; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; }
 .stat.stat-hero .v { font-size: 28px; color: var(--accent); }
+#m-pop  { color: #6b8e76; }   /* sage — "people / population / nature" */
+#m-flow { color: #3a7ca5; }   /* dusty blue — movement */
 .stat.stat-hero { position: relative; padding-right: 4px; }
 .stat .best {
   font-size: 10px; font-weight: 700;

@@ -13,10 +13,20 @@
   const LOGICAL_H = 1560;
   const GRID = 60;           // grid spacing in world units
 
-  // Car colour — single neutral slate. Drivers are drivers.
-  const CAR_COLOR = '#3a4152';
-  const CAR_COLORS = [  // subtle variance for visual interest
-    '#3a4152', '#4a5164', '#2f3544', '#505868', '#424958'
+  // Cars get a cheerful pastel mix. The player is watching these things move
+  // around — giving them life is the single biggest visual-feel lever.
+  const CAR_COLOR = '#5d6470';   // fallback / neutral for queue dots
+  const CAR_COLORS = [
+    '#db6d51',  // coral
+    '#5aa3c9',  // dusty blue
+    '#4fa16a',  // sage
+    '#e8a13a',  // amber
+    '#a065c3',  // lavender
+    '#c74a6a',  // rose
+    '#3a7ca5',  // deeper blue
+    '#d6a05a',  // honey
+    '#6b8e76',  // olive
+    '#b05a8a'   // plum
   ];
 
   // Edge entries: cars enter from one side of the map, exit through another.
@@ -1538,17 +1548,23 @@
       ctx.closePath();
       ctx.fill();
 
-      // Queue of waiting cars, extending AWAY from the map along the entry's side.
+      // Queue of waiting cars, extending AWAY from the map along the entry's
+      // side. Queue dots tinted in the gate's colour so a stacked queue is
+      // obviously "this gate's backlog".
       if (e.queue && e.queue.length > 0) {
-        const qdx = -dir[0], qdy = -dir[1];  // away from map
+        const qdx = -dir[0], qdy = -dir[1];
+        const gateCol = GATE_COLORS[e.side] || CAR_COLOR;
         for (let i = 0; i < e.queue.length; i++) {
           const d = r + (12 + i * 14) * state.view.scale;
           const qx = p.sx + qdx * d;
           const qy = p.sy + qdy * d;
-          ctx.fillStyle = CAR_COLOR;
+          ctx.fillStyle = gateCol;
+          ctx.strokeStyle = 'rgba(30, 35, 50, 0.35)';
+          ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.arc(qx, qy, 5.5 * state.view.scale, 0, Math.PI * 2);
           ctx.fill();
+          ctx.stroke();
         }
       }
 
