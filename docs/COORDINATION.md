@@ -97,16 +97,23 @@ Session-memory guesses (not authoritative until research lands):
 
 (Waiting on research before committing.)
 
+## User-answered decisions (locked — build on these)
+
+- **Primary device: tablet (iPad) first, phone second.** Laptop is
+  unlikely. Touch is the main input. Drag-to-build and two-finger pan
+  matter more than keyboard shortcuts. Desktop support should still work
+  but don't over-invest there.
+- **No game-over state.** When it clogs up, the player resets or turns
+  demand down. Keep the jam bar visible as feedback but never stop play.
+- **Open-ended sessions.** Not level-based, no fixed duration. Features
+  and pacing should support a long sandbox — build → stress-test → fix →
+  build again — rather than a scored run.
+- **Static only for now.** No Vercel Function, no backend. Any
+  persistence uses `localStorage` or URL-encoded state.
+
 ## Open questions for the user
 
-Both sessions add here. User replies in their prompt.
-
-- [ ] Primary device: mobile-first, desktop-first, or both equal?
-- [ ] Is a hard fail state ever wanted (e.g. game-over after N seconds of
-  full jam meter), or stay sandbox forever?
-- [ ] Target play session: 5 min / 15 min / open-ended?
-- [ ] OK to introduce a small Vercel Function (backend) for any future
-  feature, or strict static-only?
+_(none right now)_
 
 ## Handoff protocol
 
