@@ -694,6 +694,43 @@
     return { ok: true };
   }
 
+  // Toggle an edge between one-way and two-way. If it currently has a reverse
+  // twin, remove it (→ one-way in the direction of `edge`). If it doesn't,
+  // create one (→ two-way). Works regardless of which direction was tapped.
+  function toggleOneWay(edge) {
+    const twin = state.edges.find(x =>
+      x !== edge && x.from === edge.to && x.to === edge.from &&
+      Math.abs(x.length - edge.length) < 1
+    );
+    if (twin) {
+      state.edges = state.edges.filter(e => e.id !== twin.id);
+      state.cars = state.cars.filter(c => !c.path.some(e => e.id === twin.id));
+      rebuildAdjacency();
+      scheduleSave();
+      return { ok: true, nowOneWay: true };
+    }
+    // Add a reverse twin, making the road two-way again.
+    const rev = {
+      id: state.nextEdgeId++,
+      from: edge.to, to: edge.from,
+      shape: edge.shape.slice().reverse(),
+      length: edge.length,
+      bridge: edge.bridge,
+      custom: edge.custom
+    };
+    state.edges.push(rev);
+    rebuildAdjacency();
+    scheduleSave();
+    return { ok: true, nowOneWay: false };
+  }
+
+  function edgeIsOneWay(edge) {
+    return !state.edges.some(x =>
+      x !== edge && x.from === edge.to && x.to === edge.from &&
+      Math.abs(x.length - edge.length) < 1
+    );
+  }
+
   function eraseEdgeById(edge) {
     const twin = state.edges.find(x =>
       x !== edge && x.from === edge.to && x.to === edge.from &&
@@ -1141,7 +1178,7 @@
       const w = (e.bridge ? 20 : 22) * state.view.scale;
       drawPolyline(e.shape, w, e.bridge ? '#4a5164' : '#2d3242');
     }
-    // Dashed centre stripe
+    // Dashed centre stripe — only on two-way roads (with a reverse twin).
     ctx.save();
     ctx.setLineDash([10 * state.view.scale, 12 * state.view.scale]);
     ctx.lineCap = 'butt';
@@ -1149,10 +1186,42 @@
     ctx.lineWidth = Math.max(1, 1.2 * state.view.scale);
     for (const e of state.edges) {
       if (e.id % 2 === 0) continue;
+      if (edgeIsOneWay(e)) continue;
       drawPolyline(e.shape, 0, null, true);
     }
     ctx.setLineDash([]);
     ctx.restore();
+
+    // Direction chevrons — only on one-way edges (no twin).
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 239, 210, 0.92)';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(1.6, 2 * state.view.scale);
+    const chevSize = Math.max(3, 5 * state.view.scale);
+    for (const e of state.edges) {
+      if (!edgeIsOneWay(e)) continue;
+      const count = Math.max(1, Math.floor(e.length / 55));
+      for (let i = 0; i < count; i++) {
+        const d = (e.length / count) * (i + 0.5);
+        const sp = sampleEdge(e, d);
+        drawChevron(sp.x, sp.y, sp.hx, sp.hy, chevSize);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawChevron(wx, wy, hx, hy, size) {
+    // Centered at world (wx, wy), pointing in world direction (hx, hy).
+    const px = -hy, py = hx;
+    const p1 = w2s(wx - hx * size - px * size * 0.75, wy - hy * size - py * size * 0.75);
+    const pT = w2s(wx + hx * size,                     wy + hy * size);
+    const p2 = w2s(wx - hx * size + px * size * 0.75, wy - hy * size + py * size * 0.75);
+    ctx.beginPath();
+    ctx.moveTo(p1.sx, p1.sy);
+    ctx.lineTo(pT.sx, pT.sy);
+    ctx.lineTo(p2.sx, p2.sy);
+    ctx.stroke();
   }
 
   function drawPolyline(pts, w, color, strokeOnly) {
@@ -1613,11 +1682,12 @@
       if (e.key === 'Escape') state.dragging = null;
       if (e.key === '1') setTool('road');
       if (e.key === '2') setTool('bridge');
-      if (e.key === '3') setTool('roundabout');
-      if (e.key === '4') setTool('house');
-      if (e.key === '5') setTool('shop');
-      if (e.key === '6') setTool('mall');
-      if (e.key === '7') setTool('erase');
+      if (e.key === '3') setTool('oneway');
+      if (e.key === '4') setTool('roundabout');
+      if (e.key === '5') setTool('house');
+      if (e.key === '6') setTool('shop');
+      if (e.key === '7') setTool('mall');
+      if (e.key === '8') setTool('erase');
       if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
         document.getElementById('btn-undo').click();
         e.preventDefault();
@@ -1783,6 +1853,14 @@
       if (!edge) return toast('Tap a road to erase');
       eraseEdgeById(edge);
       toast('Road erased');
+    }
+
+    if (isTap && state.tool === 'oneway') {
+      const world = s2w(p.startX, p.startY);
+      const edge = findNearestEdge(world.x, world.y, 24 / state.view.scale);
+      if (!edge) return toast('Tap a road to toggle direction');
+      const res = toggleOneWay(edge);
+      toast(res.nowOneWay ? 'One-way on' : 'Two-way restored');
     }
 
     if (isTap && state.tool === 'roundabout') {

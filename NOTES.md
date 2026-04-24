@@ -9,6 +9,19 @@ Running notes so we don't lose direction between sessions.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v17 (one-way roads + SVG toolbar)** —
+  New **One-way** tool (keyboard `3`): tap any road to remove its reverse
+  twin and make it one-way; tap again to restore two-way. Cars respect
+  the direction (routing already used adjacency which is automatically
+  consistent). Direction chevrons (little `>` arrows in the road's lane
+  colour) render along every one-way segment so the flow is obvious.
+  Two-way roads keep their dashed centre stripe; one-way roads get
+  chevrons instead.
+  Toolbar: replaced every unicode glyph with inline SVG line icons
+  (Road, Bridge, One-way, Roundabout, House, Shop, Mall, Erase, Undo).
+  Button styling: soft white cards with 1px border and subtle shadow;
+  hover lifts slightly with stronger shadow; active tool is big orange
+  with inset shadow for a proper "pressed" feel. Much less prototype-y.
 - **2026-04-24 — v16 (houses as origins + People HUD + building variety)** —
   Houses now generate their own traffic. Each house spawns a car every
   5.5s (scaled by the Demand slider) heading to a random Mall / Shop /
