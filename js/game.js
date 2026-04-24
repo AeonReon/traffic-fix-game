@@ -11,28 +11,27 @@
   const LOGICAL_W = 1200;
   const LOGICAL_H = 800;
 
-  // Colours for houses/shops (matched pairs).
-  const PALETTE = [
-    { name: 'coral',  house: '#db6d51', shop: '#c95a3e', car: '#e48875' },
-    { name: 'teal',   house: '#3b82a8', shop: '#2a6d90', car: '#5aa3c9' },
-    { name: 'olive',  house: '#6a8f3d', shop: '#567230', car: '#8fae61' },
-    { name: 'ochre',  house: '#d29237', shop: '#b87726', car: '#e8b266' }
+  // Car colour — single neutral slate. Drivers are drivers.
+  const CAR_COLOR = '#3a4152';
+  const CAR_COLORS = [  // subtle variance for visual interest
+    '#3a4152', '#4a5164', '#2f3544', '#505868', '#424958'
   ];
 
-  // Buildings. `kind` is 'house' or 'shop'. `color` indexes PALETTE.
-  // Laid out so the starting scene has two clean parallel corridors,
-  // with extra destinations on either side to reward new roads later.
+  // Edge entries: cars enter from one side of the map, exit through another.
+  // Coordinates sit just inside the logical 1200×800 area so they render as
+  // gates on the border.
   const LEVEL = {
-    buildings: [
-      { id: 1, kind: 'house', color: 0, x:  90, y: 280 },
-      { id: 2, kind: 'shop',  color: 0, x: 1110, y: 280 },
-      { id: 3, kind: 'house', color: 1, x:  90, y: 520 },
-      { id: 4, kind: 'shop',  color: 1, x: 1110, y: 520 }
+    entries: [
+      { id: 'N', x: 600, y:  50,  side: 'N', label: 'North' },
+      { id: 'S', x: 600, y: 750,  side: 'S', label: 'South' },
+      { id: 'W', x:  50, y: 400,  side: 'W', label: 'West'  },
+      { id: 'E', x:1150, y: 400,  side: 'E', label: 'East'  }
     ],
-    // Only the coral pair has a pre-built road. The teal pair is waiting for
-    // the player to connect — that's the tutorial moment.
+    // One pre-built road spanning W↔E so something moves on first boot.
+    // N and S are intentionally disconnected — building the first road
+    // between them is the tutorial moment.
     starterRoads: [
-      { a: { x:  90, y: 280 }, b: { x: 1110, y: 280 } }
+      { a: { x: 50, y: 400 }, b: { x: 1150, y: 400 } }
     ]
   };
 
@@ -43,11 +42,10 @@
   const CAR_FOLLOW_TRIGGER = 42;          // start following at this gap
   const CAR_STOP_GAP = 28;                // stop if leader is this close
 
-  const SPAWN_INTERVAL_START = 1.6;       // seconds between cars per house (relaxed)
-  const SPAWN_INTERVAL_END = 0.55;        // how fast at peak demand
-  const DEMAND_RAMP_SECS = 180;           // how long until peak
-
-  const QUEUE_FAIL_SIZE = 9;              // fail when a house has this many waiting
+  // Spawning — manually controlled by a HUD slider instead of auto-ramping.
+  // Interval = BASE / demandMult. demandMult = 0 means paused.
+  const BASE_SPAWN_INTERVAL = 1.6;
+  const QUEUE_FAIL_SIZE = 9;
   const JAM_FILL_RATE = 0.14;
   const JAM_DRAIN_RATE = 0.06;
   const JAM_FAIL = 1.0;
@@ -56,9 +54,9 @@
   // State
   // ================================================================
   const state = {
-    buildings: [],      // { id, kind, color, x, y, queue: Car[] }
-    nodes: new Map(),   // id -> { id, x, y, building? }
-    edges: [],          // { id, from, to, shape:[{x,y},..], length }
+    entries: [],        // { id, x, y, side, nodeId, queue[], timer }
+    nodes: new Map(),
+    edges: [],
     adjacency: new Map(),
     nextNodeId: 1,
     nextEdgeId: 1,
@@ -72,6 +70,7 @@
     over: false,
     delivered: 0,
     jamMeter: 0,
+    demandMult: 1.0,    // slider-controlled 0..3
 
     // Camera / view fitted to LOGICAL coords
     view: { scale: 1, originX: LOGICAL_W / 2, originY: LOGICAL_H / 2, dpr: window.devicePixelRatio || 1 },
@@ -89,7 +88,7 @@
   // Network helpers
   // ================================================================
   function makeNode(x, y, opts = {}) {
-    const n = { id: state.nextNodeId++, x, y, building: opts.building || null };
+    const n = { id: state.nextNodeId++, x, y, entry: opts.entry || null };
     state.nodes.set(n.id, n);
     return n;
   }
@@ -589,42 +588,45 @@
   // Spawning
   // ================================================================
   function currentSpawnInterval() {
-    const t = Math.min(1, state.time / DEMAND_RAMP_SECS);
-    return SPAWN_INTERVAL_START + (SPAWN_INTERVAL_END - SPAWN_INTERVAL_START) * t;
+    const m = state.demandMult;
+    if (m < 0.02) return Infinity;  // paused
+    return BASE_SPAWN_INTERVAL / m;
   }
 
-  function tryDispatchFromQueue(building) {
-    if (building.kind !== 'house' || building.queue.length === 0) return;
-    // Pick a random matching-colour shop.
-    const shops = state.buildings.filter(b => b.kind === 'shop' && b.color === building.color);
-    if (!shops.length) return;
-    // Try each in order of distance for a reliable fast default.
-    shops.sort((a, b) => (a.x - building.x) ** 2 + (a.y - building.y) ** 2 - ((b.x - building.x) ** 2 + (b.y - building.y) ** 2));
-    for (const shop of shops) {
-      const path = routeFromNode(building.nodeId, shop.nodeId);
+  function tryDispatchFromQueue(entry) {
+    if (entry.queue.length === 0) return;
+    // Pick a random other entry as the destination; try each in random order.
+    const others = state.entries.filter(e => e.id !== entry.id);
+    for (let i = others.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [others[i], others[j]] = [others[j], others[i]];
+    }
+    for (const target of others) {
+      const path = routeFromNode(entry.nodeId, target.nodeId);
       if (!path || path.length === 0) continue;
 
-      // Check first edge has room for a new car.
+      // First edge must have room for a newly spawned car.
       const firstEdge = path[0];
-      const alreadyOnEdge = state.cars.filter(c => c.path[c.pathIdx] === firstEdge);
       let blocked = false;
-      for (const c of alreadyOnEdge) {
-        if (c.pos < CAR_RADIUS * 2 + CAR_GAP + 6) { blocked = true; break; }
+      for (const c of state.cars) {
+        if (c.path[c.pathIdx] === firstEdge && c.pos < CAR_RADIUS * 2 + CAR_GAP + 6) {
+          blocked = true; break;
+        }
       }
-      if (blocked) return; // try next tick
+      if (blocked) return;
 
       const car = {
         id: state.nextCarId++,
         path, pathIdx: 0, pos: 0,
         speed: 0, maxSpeed: CAR_SPEED,
-        color: PALETTE[building.color].car,
-        sinkId: shop.id,
-        houseId: building.id,
+        color: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)],
+        sinkEntryId: target.id,
+        srcEntryId: entry.id,
         spawnedAt: state.time,
         stuckTime: 0
       };
       state.cars.push(car);
-      building.queue.pop();
+      entry.queue.pop();
       return;
     }
   }
@@ -633,17 +635,15 @@
     if (state.paused || state.over) return;
     state.time += dt;
 
-    // Per-house spawning. Each house has its own timer.
+    // Per-entry spawning. Each entry has its own timer.
     const interval = currentSpawnInterval();
-    for (const b of state.buildings) {
-      if (b.kind !== 'house') continue;
-      b.timer = (b.timer || 0) + dt;
-      while (b.timer >= interval) {
-        b.timer -= interval;
-        // Cap the queue so it can't grow forever when a house has no path.
-        if (b.queue.length < 12) b.queue.push({ waitingSince: state.time });
+    for (const e of state.entries) {
+      e.timer = (e.timer || 0) + dt;
+      while (e.timer >= interval) {
+        e.timer -= interval;
+        if (e.queue.length < 12) e.queue.push({ waitingSince: state.time });
       }
-      tryDispatchFromQueue(b);
+      tryDispatchFromQueue(e);
     }
 
     // Move cars.
@@ -714,11 +714,10 @@
     }
     if (toRemove.length) state.cars = state.cars.filter(c => !toRemove.includes(c));
 
-    // Jam meter: fills when any house queue is too long.
+    // Jam meter: fills when any entry queue is too long.
     let jamPressure = 0;
-    for (const b of state.buildings) {
-      if (b.kind !== 'house') continue;
-      if (b.queue.length >= QUEUE_FAIL_SIZE) jamPressure += (b.queue.length - QUEUE_FAIL_SIZE + 1);
+    for (const e of state.entries) {
+      if (e.queue.length >= QUEUE_FAIL_SIZE) jamPressure += (e.queue.length - QUEUE_FAIL_SIZE + 1);
     }
     if (jamPressure > 0) state.jamMeter = Math.min(JAM_FAIL, state.jamMeter + JAM_FILL_RATE * dt * Math.max(1, jamPressure / 3));
     else state.jamMeter = Math.max(0, state.jamMeter - JAM_DRAIN_RATE * dt);
@@ -769,7 +768,7 @@
     ctx.scale(state.view.dpr, state.view.dpr);
 
     drawRoads();
-    drawBuildings();
+    drawEntries();
     drawCars();
     drawDragPreview();
 
@@ -820,65 +819,63 @@
     ctx.stroke();
   }
 
-  function drawBuildings() {
-    for (const b of state.buildings) {
-      const p = w2s(b.x, b.y);
-      const col = PALETTE[b.color];
-      const r = 26 * state.view.scale;
+  function drawEntries() {
+    for (const e of state.entries) {
+      const p = w2s(e.x, e.y);
+      const r = 20 * state.view.scale;
       // Shadow
-      ctx.fillStyle = 'rgba(30, 35, 50, 0.16)';
+      ctx.fillStyle = 'rgba(30, 35, 50, 0.18)';
       ctx.beginPath();
-      ctx.ellipse(p.sx, p.sy + 4 * state.view.scale, r * 0.95, r * 0.4, 0, 0, Math.PI * 2);
+      ctx.ellipse(p.sx, p.sy + 3 * state.view.scale, r * 0.95, r * 0.4, 0, 0, Math.PI * 2);
       ctx.fill();
-      // Body
-      if (b.kind === 'house') {
-        drawHouse(p.sx, p.sy, r, col.house);
-      } else {
-        drawShop(p.sx, p.sy, r, col.shop);
-      }
-      // Queue of waiting cars under a house
-      if (b.kind === 'house' && b.queue && b.queue.length > 0) {
-        for (let i = 0; i < b.queue.length; i++) {
-          const qx = p.sx - r - (10 * state.view.scale) - i * (13 * state.view.scale);
-          const qy = p.sy;
-          ctx.fillStyle = col.car;
+      // Gate body — a rounded square tile with a little arrow pointing into the map
+      ctx.fillStyle = '#e8d59e';
+      ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+
+      // Arrow showing direction the cars travel into the map
+      ctx.fillStyle = 'rgba(30, 35, 50, 0.75)';
+      const dir = {
+        N: [0,  1], S: [0, -1],
+        W: [1,  0], E: [-1, 0]
+      }[e.side] || [0, 0];
+      const ax = p.sx, ay = p.sy;
+      const head = r * 0.55;
+      const tail = r * 0.35;
+      ctx.beginPath();
+      // Triangle pointing toward dir
+      ctx.moveTo(ax + dir[0] * head, ay + dir[1] * head);
+      ctx.lineTo(ax - dir[1] * tail * 0.6 - dir[0] * tail * 0.2,
+                 ay + dir[0] * tail * 0.6 - dir[1] * tail * 0.2);
+      ctx.lineTo(ax + dir[1] * tail * 0.6 - dir[0] * tail * 0.2,
+                 ay - dir[0] * tail * 0.6 - dir[1] * tail * 0.2);
+      ctx.closePath();
+      ctx.fill();
+
+      // Queue of waiting cars, extending AWAY from the map along the entry's side.
+      if (e.queue && e.queue.length > 0) {
+        const qdx = -dir[0], qdy = -dir[1];  // away from map
+        for (let i = 0; i < e.queue.length; i++) {
+          const d = r + (12 + i * 14) * state.view.scale;
+          const qx = p.sx + qdx * d;
+          const qy = p.sy + qdy * d;
+          ctx.fillStyle = CAR_COLOR;
           ctx.beginPath();
           ctx.arc(qx, qy, 5.5 * state.view.scale, 0, Math.PI * 2);
           ctx.fill();
         }
       }
+
+      // Label
+      ctx.fillStyle = 'rgba(30, 35, 50, 0.65)';
+      ctx.font = `${Math.max(10, 10 * state.view.scale)}px -apple-system, BlinkMacSystemFont, "SF Pro Rounded", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(e.id, p.sx, p.sy + r + 14 * state.view.scale);
     }
-  }
-
-  function drawHouse(cx, cy, r, color) {
-    ctx.fillStyle = color;
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.5)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    // Pentagon (house with roof) pointing up
-    ctx.moveTo(cx, cy - r);
-    ctx.lineTo(cx + r * 0.85, cy - r * 0.2);
-    ctx.lineTo(cx + r * 0.75, cy + r * 0.75);
-    ctx.lineTo(cx - r * 0.75, cy + r * 0.75);
-    ctx.lineTo(cx - r * 0.85, cy - r * 0.2);
-    ctx.closePath();
-    ctx.fill(); ctx.stroke();
-  }
-
-  function drawShop(cx, cy, r, color) {
-    ctx.fillStyle = color;
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.5)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r * 0.9, 0, Math.PI * 2);
-    ctx.fill(); ctx.stroke();
-    // Cross mark like a shop / destination
-    ctx.strokeStyle = 'rgba(255, 250, 238, 0.85)';
-    ctx.lineWidth = Math.max(2, 2.5 * state.view.scale);
-    ctx.beginPath();
-    ctx.moveTo(cx - r * 0.42, cy); ctx.lineTo(cx + r * 0.42, cy);
-    ctx.moveTo(cx, cy - r * 0.42); ctx.lineTo(cx, cy + r * 0.42);
-    ctx.stroke();
   }
 
   function drawCars() {
@@ -990,6 +987,16 @@
     document.getElementById('btn-start').addEventListener('click', startGame);
     document.getElementById('btn-retry').addEventListener('click', restart);
 
+    const demandSlider = document.getElementById('demand-slider');
+    const demandVal = document.getElementById('m-demand');
+    const applyDemand = () => {
+      const raw = parseInt(demandSlider.value, 10);
+      state.demandMult = raw / 100;
+      demandVal.textContent = state.demandMult.toFixed(1) + '×';
+    };
+    demandSlider.addEventListener('input', applyDemand);
+    applyDemand();
+
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space') { togglePause(); e.preventDefault(); }
       if (e.key === 'Escape') state.dragging = null;
@@ -1025,9 +1032,13 @@
 
     if (state.pointers.size === 2) {
       const pts = [...state.pointers.values()];
-      state.pinch = { dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) };
+      state.pinch = {
+        dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y),
+        mid: { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+      };
       state.dragging = null;
       state.panActive = false;
+      canvas.classList.remove('grabbing');
       return;
     }
 
@@ -1073,9 +1084,21 @@
     if (state.pinch && state.pointers.size === 2) {
       const pts = [...state.pointers.values()];
       const newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
-      if (state.pinch.dist > 1) zoomAt(mid.x, mid.y, newDist / state.pinch.dist);
+      const newMid  = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+
+      // Pinch zoom
+      if (state.pinch.dist > 1) zoomAt(newMid.x, newMid.y, newDist / state.pinch.dist);
+
+      // Two-finger pan: move origin by how much the midpoint moved.
+      if (state.pinch.mid) {
+        const dx = (newMid.x - state.pinch.mid.x) / state.view.scale;
+        const dy = (newMid.y - state.pinch.mid.y) / state.view.scale;
+        state.view.originX -= dx;
+        state.view.originY -= dy;
+      }
+
       state.pinch.dist = newDist;
+      state.pinch.mid  = newMid;
       return;
     }
 
@@ -1162,25 +1185,21 @@
   // Game state transitions
   // ================================================================
   function buildLevel() {
-    // Create building nodes + queues
     state.nodes.clear();
     state.edges.length = 0;
-    state.buildings = [];
+    state.entries = [];
     state.cars = [];
     state.nextNodeId = 1;
     state.nextEdgeId = 1;
 
-    // Insert buildings, create a node for each at their location.
-    for (const bp of LEVEL.buildings) {
-      const node = makeNode(bp.x, bp.y, { building: bp.id });
-      const b = { ...bp, nodeId: node.id, queue: [], timer: 0 };
-      state.buildings.push(b);
+    for (const ep of LEVEL.entries) {
+      const node = makeNode(ep.x, ep.y, { entry: ep.id });
+      state.entries.push({ ...ep, nodeId: node.id, queue: [], timer: 0 });
     }
 
-    // Starter roads — each road from one building's node to another's by position matching.
     for (const r of LEVEL.starterRoads) {
-      const startNode = findNearestNode(r.a.x, r.a.y, 6);
-      const endNode = findNearestNode(r.b.x, r.b.y, 6);
+      const startNode = findNearestNode(r.a.x, r.a.y, 8);
+      const endNode = findNearestNode(r.b.x, r.b.y, 8);
       if (startNode && endNode) makeEdge(startNode, endNode);
     }
 
@@ -1194,10 +1213,8 @@
     state.paused = false;
     state.started = true;
     // Seed with a few cars so the scene is immediately alive.
-    for (let i = 0; i < 6; i++) {
-      for (const b of state.buildings) {
-        if (b.kind === 'house') b.queue.push({ waitingSince: 0 });
-      }
+    for (let i = 0; i < 4; i++) {
+      for (const e of state.entries) e.queue.push({ waitingSince: 0 });
     }
     for (let i = 0; i < 80; i++) stepSim(0.05);
   }
@@ -1226,12 +1243,9 @@
 
   function updateHud() {
     document.getElementById('m-done').textContent = state.delivered;
-    // Flow = cars delivered per minute over the last 60s. Approximate with
-    // total delivered over elapsed time.
     const ratePerMin = state.time > 0 ? (state.delivered / state.time) * 60 : 0;
     document.getElementById('m-flow').innerHTML = `${Math.round(ratePerMin)}<span class="u">/min</span>`;
-    const dm = (SPAWN_INTERVAL_START / currentSpawnInterval()).toFixed(1);
-    document.getElementById('m-demand').innerHTML = `${dm}<span class="u">×</span>`;
+    // Demand label updated by slider handler, not here.
     const fill = document.getElementById('jam-fill');
     fill.style.width = (state.jamMeter * 100).toFixed(0) + '%';
     fill.classList.toggle('warn', state.jamMeter > 0.35 && state.jamMeter < 0.7);

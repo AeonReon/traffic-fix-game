@@ -18,9 +18,9 @@
     <div class="splash-card">
       <h1>Traffic Flow</h1>
       <p class="sub">Keep the cars moving</p>
-      <p class="blurb">The coral house is delivering to its shop. The teal house is waiting for a road — <b>drag</b> from teal house to teal shop to connect them.</p>
+      <p class="blurb">Cars enter from the four edges (N / S / E / W) and want to drive through the city and exit at a different edge. Drag to build roads. Use the Demand slider up top to control how many cars arrive — turn it down to fix things, crank it up to stress-test.</p>
       <button id="btn-start" class="primary">Start</button>
-      <p class="hint">Tap a junction with 3+ roads with the <b>Roundabout</b> tool to convert it. Demand rises over time — keep the queues down.</p>
+      <p class="hint">One finger drags a road. Two fingers pan and pinch-zoom the map. Tap a 3-way junction with <b>Roundabout</b> to convert it.</p>
     </div>
   </div>
 
@@ -34,10 +34,13 @@
         <span class="k">Flow</span>
         <span id="m-flow" class="v">0<span class="u">/min</span></span>
       </div>
-      <div class="stat">
+    </div>
+    <div class="demand-wrap">
+      <div class="demand-label">
         <span class="k">Demand</span>
-        <span id="m-demand" class="v">1<span class="u">×</span></span>
+        <span id="m-demand" class="demand-val">1.0×</span>
       </div>
+      <input id="demand-slider" type="range" min="0" max="300" value="100" step="5" />
     </div>
     <div class="jam-meter-wrap">
       <div class="jam-meter-label">Jam</div>

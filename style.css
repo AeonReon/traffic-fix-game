@@ -118,6 +118,38 @@ html, body {
 .stat .v { font-size: 20px; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; }
 .stat .u { font-size: 11px; color: var(--ink-soft); font-weight: 600; margin-left: 2px; }
 
+.demand-wrap {
+  display: flex; flex-direction: column; gap: 4px; min-width: 130px;
+}
+.demand-label {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+}
+.demand-label .k {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-soft); font-weight: 700;
+}
+.demand-val {
+  font-size: 14px; font-weight: 800; color: var(--accent); letter-spacing: -0.01em;
+}
+#demand-slider {
+  width: 100%; margin: 0; padding: 0; height: 20px;
+  -webkit-appearance: none; appearance: none;
+  background: transparent;
+}
+#demand-slider::-webkit-slider-runnable-track {
+  height: 4px; background: rgba(42,47,60,0.18); border-radius: 4px;
+}
+#demand-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--panel);
+  margin-top: -7px; box-shadow: var(--shadow-sm); cursor: pointer;
+}
+#demand-slider::-moz-range-track { height: 4px; background: rgba(42,47,60,0.18); border-radius: 4px; }
+#demand-slider::-moz-range-thumb {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--panel); cursor: pointer;
+}
+
 .jam-meter-wrap {
   flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 80px; max-width: 260px;
 }
@@ -183,12 +215,14 @@ html, body {
 @media (max-width: 640px) {
   .splash-card { padding: 26px 22px; }
   .splash-card h1 { font-size: 26px; }
-  #hud { gap: 10px; padding: 10px 12px; }
+  #hud { gap: 10px; padding: 10px 12px; flex-wrap: wrap; }
   .hud-left { gap: 10px; }
   .stat .v { font-size: 16px; }
   .stat .k { font-size: 9px; }
   .jam-meter-wrap { max-width: none; min-width: 60px; }
   .jam-meter-label { font-size: 9px; }
+  .demand-wrap { min-width: 110px; flex: 1 1 auto; }
+  .demand-val { font-size: 13px; }
   #toolbar {
     left: 10px; right: 10px;
     transform: none;
