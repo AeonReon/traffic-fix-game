@@ -103,6 +103,11 @@ mechanic choice.
   tint) and eight dev-workflow upgrades (top: playtest auto-runs on
   every ship). Currently the most actionable research doc for the
   next few weeks.
+- **`docs/research/milestones.md`** — full spec for the soft-goal
+  toast system (optimization.md A4). 30 milestones across 4 tiers,
+  toast visual + animation, persistence schema, grandfathering for
+  existing saves, design rules. Ready to paste: build session can
+  lift the `MILESTONES` object directly.
 
 ---
 

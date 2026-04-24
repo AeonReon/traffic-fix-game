@@ -105,22 +105,15 @@ and Dwarf Fortress thrive on *incidental* goals the player stumbles
 into — our game should too.
 ([Dwarf Fortress Steam — "no predefined goal"](https://steamcommunity.com/app/975370/discussions/0/3709307511570135965/))
 
-**The fix:** A small list of milestones that trigger a toast when
-hit. Not quests — no UI for them, no tracker, they just *happen*.
+**The fix:** A catalogue of milestones that trigger a toast when
+incidentally hit. Not quests — no UI for them, no tracker, they
+just *happen*.
 
-Starter set:
-- First car delivered → "First delivery!"
-- Score 100 / 500 / 1000 / 5000 → "Score 100!" etc.
-- First Mall placed → "Your first mall."
-- 10 Houses placed → "The neighbourhood takes shape."
-- 60s continuous at 3× demand with jam meter under 0.3 → "Smooth
-  city — flow mastered."
-- All 4 gates connected for the first time → "All gates connected."
-- First one-way road → "One-way streets can transform a city."
-
-Store which milestones have been seen (per persistent-city save) so
-they don't re-fire constantly. Toast animation: slide up from
-bottom, 3s visible, ease out.
+**Full catalogue and implementation spec: `milestones.md`.**
+30 milestones across 4 tiers (first-time / scale / craft / rare),
+toast visual spec, grandfathering logic for existing saves,
+acceptance criteria. Build session can paste the `MILESTONES`
+object straight from there.
 
 **Why it matters:** Gives the player a *reason to try things* they
 wouldn't have tried otherwise. Zero cost to player freedom (no
