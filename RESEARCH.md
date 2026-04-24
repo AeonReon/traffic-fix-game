@@ -38,14 +38,34 @@ Two Claude sessions are working in parallel on the same folder:
 
 **STATUS (update when shipped):**
 
-- [~] Stage A — Typed buildings *(A.1 shipped v12: House/Shop/Mall placement + visuals; weighted dispatch, pressure indicators, upgrades still pending — see next-features.md)*
+- [x] Stage A — Typed buildings *(A.1 shipped v12: House/Shop/Mall placement + visuals; A.2 shipped v13: weighted dispatch + pressure rings. Building upgrades deferred to Stage D as an upgrade-pool entry.)*
+- [x] **next-features #1 — Persistence** shipped v14. Known bug P1: loadState is defined but never called on boot, so every refresh wipes the city. See `docs/testing/known-issues.md`. Fix blocks the feature from actually working.
 - [ ] Stage B — Demand curve & rush hour
 - [ ] Stage C — Traffic control upgrades
 - [ ] Stage D — Weekly progression & scoring
-- [ ] Stage E — Visual polish (cars look like cars, houses look like houses)
+- [>] **Stage E — Visual polish** *(next up — open `docs/research/design-pack.md` and walk Pass A onward. Goal: cars look like cars, buildings have distinct silhouettes. Target quality: Mini Motorways or better.)*
 - [ ] Stage F — Terrain & pre-built layouts
 - [ ] Stage G — Audio
 - [ ] Stage H — Real-world mode (OSM import, long horizon)
+
+## Playtest signal (from `docs/testing/`)
+
+Playtest session is live and has reviewed through v13. Current state:
+**14 bugs filed** — 2×P1, 6×P2, 4×P3, 2×P4. The two P1s block correctness:
+
+- **P1 Persistence is write-only** — `loadState` exists but no caller.
+  Every refresh wipes the city despite the save blob being written
+  faithfully. Fixing this requires ~20 lines in boot: call
+  `hasSavedCity()` → call `loadState()` → set `state.started = true`.
+  Also fix the sibling P2: `loadState` doesn't set `state.started`, so
+  post-load edits don't persist either.
+- **P1 Queue dispatch is LIFO** — `tryDispatchFromQueue` uses
+  `entry.queue.pop()` instead of `.shift()`. Dormant today (wait-time
+  isn't displayed), will bite the moment a "longest wait" metric ships.
+  One-character fix.
+
+Neither blocks the visual-polish pass. Suggested ordering for the next
+build session: fix both P1s (≤ 30 min), then start design-pack Pass A.
 
 ## Deep-dive research docs
 
