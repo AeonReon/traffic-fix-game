@@ -910,6 +910,20 @@
     ctx.stroke();
   }
 
+  // Adds a rounded-rect path to ctx — caller beginPath()/fill()/stroke() around it.
+  function roundedRect(x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, w / 2, h / 2));
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+  }
+
   function drawBlocks() {
     const palette = ['#d4b68a', '#c6a18f', '#a8b890', '#b8c4a8', '#c8a881'];
     for (const b of state.blocks) {
@@ -1400,9 +1414,9 @@
   function frame(ts) {
     const dt = Math.min(0.08, (ts - lastFrame) / 1000 || 0);
     lastFrame = ts;
-    stepSim(dt);
-    render();
-    updateHud();
+    try { stepSim(dt); } catch (err) { console.error('stepSim error:', err); }
+    try { render(); }     catch (err) { console.error('render error:', err); }
+    try { updateHud(); }  catch (err) { console.error('updateHud error:', err); }
     requestAnimationFrame(frame);
   }
 
