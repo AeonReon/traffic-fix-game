@@ -96,6 +96,12 @@
 
     effects: [],        // ephemeral visual bursts { x, y, startTime, kind }
 
+    // Flow sparkline — samples of per-minute delivery rate.
+    flowSamples: [],    // last 60 numbers (one per sim-second)
+    flowLastSampleAt: -1,
+    flowLastCount: 0,   // delivered-at-last-sample, so we can diff
+    flowPeak: 0,
+
 
     undoStack: [],      // [{ type: 'road' | 'block', ... }]
 
@@ -275,7 +281,9 @@
       delivered: state.delivered,
       visits: state.visits,
       score: state.score,
-      bestScore: state.bestScore
+      bestScore: state.bestScore,
+      flowSamples: state.flowSamples,
+      flowPeak: state.flowPeak
     };
   }
 
@@ -295,6 +303,10 @@
       state.visits = data.visits || 0;
       state.score = data.score || 0;
       state.bestScore = data.bestScore || 0;
+      state.flowSamples = Array.isArray(data.flowSamples) ? data.flowSamples.slice(-60) : [];
+      state.flowPeak = data.flowPeak || 0;
+      state.flowLastSampleAt = -1;
+      state.flowLastCount = state.delivered;
       state.cars = [];
       state.undoStack = [];
       state.jamMeter = 0;
@@ -1123,6 +1135,28 @@
       if (c.destKind !== 'block' || c.hasVisited) continue;
       const b = state.blocks.find(x => x.id === c.blockId);
       if (b) b.incoming++;
+    }
+
+    // Sample the delivery-per-minute rate once per sim-second for the
+    // Flow sparkline. Converts the 1s window count to a /min figure.
+    if (state.flowLastSampleAt < 0) {
+      state.flowLastSampleAt = state.time;
+      state.flowLastCount = state.delivered;
+    } else if (state.time - state.flowLastSampleAt >= 1) {
+      const dt1 = state.time - state.flowLastSampleAt;
+      const deltaDelivered = state.delivered - state.flowLastCount;
+      const perMin = (deltaDelivered / dt1) * 60;
+      state.flowSamples.push(perMin);
+      if (state.flowSamples.length > 60) state.flowSamples.shift();
+      // Peak tracking — notify when we break it (after a warm-up).
+      if (perMin > state.flowPeak + 0.5 && state.time > 10) {
+        state.flowPeak = perMin;
+        toast(`New peak flow: ${Math.round(perMin)}/min`, 1600);
+      } else if (perMin > state.flowPeak) {
+        state.flowPeak = perMin;
+      }
+      state.flowLastSampleAt = state.time;
+      state.flowLastCount = state.delivered;
     }
 
     // Age out visual effects — points popups live longer than bursts.
@@ -2065,6 +2099,10 @@
     state.nextBlockId = 1;
     state.visits = 0;
     state.score = 0;
+    state.flowSamples = [];
+    state.flowLastSampleAt = -1;
+    state.flowLastCount = 0;
+    state.flowPeak = 0;
     // bestScore intentionally preserved across resets.
 
     for (const ep of LEVEL.entries) {
@@ -2128,6 +2166,73 @@
     document.getElementById('paused-overlay').classList.toggle('show', state.paused);
   }
 
+  let flowSparkCtx = null;
+  function drawFlowSpark() {
+    const canvas = document.getElementById('flow-spark');
+    if (!canvas) return;
+    if (!flowSparkCtx) flowSparkCtx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const W = canvas.clientWidth || 110, H = canvas.clientHeight || 20;
+    if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
+      canvas.width = W * dpr; canvas.height = H * dpr;
+    }
+    const c = flowSparkCtx;
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.clearRect(0, 0, W, H);
+
+    const samples = state.flowSamples;
+    if (samples.length < 2) return;
+    const peak = state.flowPeak || 1;
+    const yMax = Math.max(peak, 1);
+    const last = samples[samples.length - 1];
+    const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
+    const goodColor = '#4fa16a', badColor = '#c24a3d';
+    const col = last >= avg ? goodColor : badColor;
+
+    // Peak line (faint horizontal).
+    c.strokeStyle = 'rgba(219, 109, 81, 0.35)';
+    c.lineWidth = 1;
+    c.setLineDash([3, 3]);
+    c.beginPath();
+    c.moveTo(0, 2);
+    c.lineTo(W, 2);
+    c.stroke();
+    c.setLineDash([]);
+
+    // Area under line.
+    c.beginPath();
+    c.moveTo(0, H);
+    const n = samples.length;
+    for (let i = 0; i < n; i++) {
+      const x = (i / (60 - 1)) * W;
+      const y = H - (samples[i] / yMax) * (H - 3);
+      if (i === 0) c.lineTo(x, y); else c.lineTo(x, y);
+    }
+    const lastX = ((n - 1) / 59) * W;
+    c.lineTo(lastX, H);
+    c.closePath();
+    c.fillStyle = last >= avg ? 'rgba(79, 161, 106, 0.18)' : 'rgba(194, 74, 61, 0.18)';
+    c.fill();
+
+    // Line itself.
+    c.strokeStyle = col;
+    c.lineWidth = 1.6;
+    c.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = (i / 59) * W;
+      const y = H - (samples[i] / yMax) * (H - 3);
+      if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+    }
+    c.stroke();
+
+    // Current-value dot at the right edge.
+    const endY = H - (last / yMax) * (H - 3);
+    c.fillStyle = col;
+    c.beginPath();
+    c.arc(lastX, endY, 2.4, 0, Math.PI * 2);
+    c.fill();
+  }
+
   function updateHud() {
     document.getElementById('m-score').textContent = state.score;
     const bestEl = document.getElementById('m-best');
@@ -2140,6 +2245,7 @@
     document.getElementById('m-pop').textContent = pop;
     const ratePerMin = state.time > 0 ? (state.delivered / state.time) * 60 : 0;
     document.getElementById('m-flow').innerHTML = `${Math.round(ratePerMin)}<span class="u">/min</span>`;
+    drawFlowSpark();
     // Demand label updated by slider handler, not here.
     const fill = document.getElementById('jam-fill');
     fill.style.width = (state.jamMeter * 100).toFixed(0) + '%';

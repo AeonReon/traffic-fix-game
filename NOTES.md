@@ -5,7 +5,7 @@ Running notes so we don't lose direction between sessions.
 > **What's next:** see `RESEARCH.md` (the other session's roadmap).
 > **Coordination rules:** see `docs/COORDINATION.md`.
 
-## Current features (what the player can do today — v21)
+## Current features (what the player can do today — v22)
 
 Single source of truth for "what this game actually is right now."
 Update this list whenever a user-visible feature ships or is cut.
@@ -37,7 +37,9 @@ Update this list whenever a user-visible feature ships or is cut.
 **Feedback**
 - Big **Score** stat (HUD, orange); **Best score** persisted under it.
 - **People** count (houses × 2, sage).
-- **Flow** per-minute (dusty blue).
+- **Flow** per-minute (dusty blue) + 60-second sparkline showing the
+  last minute's deliveries/min (green fill when above running avg,
+  red when below). Beating your peak flow pops a "New peak!" toast.
 - **Jam** meter (green → amber → red).
 - Per-building **pressure rings** (green → amber → red based on
   incoming-car count vs capacity).
@@ -71,6 +73,17 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v22 (A2: flow sparkline + peak callout)** — The
+  Flow HUD stat now carries a 120×24 canvas sparkline showing the
+  last 60 seconds of delivery rate (sampled once per simulated
+  second). Fill / line colour is green when the current second is
+  at or above the rolling 60s average, red when below. A faint
+  terracotta dashed line at the top marks "peak this session".
+  The whole samples array and peak persist in the save file so a
+  tomorrow-session's sparkline keeps its history. Beating your
+  session peak pops a short "New peak flow: N/min" toast — small
+  dopamine for pushing the city harder. This is the missing
+  feedback signal of 'did my last change help?'.
 - **2026-04-24 — v21 (A1: explicit Pause)** — Proper pause. Tapping
   the pause icon or pressing Space freezes the sim entirely — cars
   stop, spawning stops, pressure rings stop changing, timers stop.
