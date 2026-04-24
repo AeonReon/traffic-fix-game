@@ -329,6 +329,41 @@ via exit can be attributed to its origin (stat breakdowns,
 future features).
 **Impact:** Zero today.
 
+### [P3] Road-click sound is the only audio feedback — other actions are silent
+**Status:** open, new in v23
+**Found:** 2026-04-24, v23 `4bec233`
+**Repro:** Start the game, place a House / toggle One-way on a
+road / tap Roundabout on a junction / Erase a road / Undo.
+**Expected:** Similar quick feedback sound for every
+successful edit, like `Audio.click()` on road build.
+**Actual:** Only road/bridge builds trigger `Audio.click()`
+(v23 `game.js:2042`). Block placement, one-way toggle,
+roundabout, erase and undo are silent even though they're all
+successful edits.
+**Hypothesis:** Call `Audio.click()` (or a per-tool variant from
+`research/sound.md` Pass 2) from each successful action path.
+Could also be a design choice — but the inconsistency feels like
+an oversight since "click on successful action" is the natural
+mental model.
+**Impact:** Feedback feels patchy. Reinforces the "road is the
+only real tool" mental model even though placement is arguably
+the more impactful action.
+
+### [P4] `Audio` const shadows the built-in `window.Audio`
+**Status:** open, new in v23
+**Found:** 2026-04-24, v23 `4bec233`
+**Actual:** The v23 module declares `const Audio = { ... }`
+inside the outer IIFE (`game.js:2293`). Because everything in
+`game.js` lives in that IIFE, this shadows `window.Audio` (the
+HTMLAudioElement constructor) for the rest of the file. Harmless
+today — no `new Audio(url)` calls exist — but a future feature
+(e.g. loading an mp3 for a jingle) would silently call the
+object constructor-style and throw.
+**Hypothesis:** Rename the namespace to `Sound` (or `AudioFX`)
+to remove the shadow. One-line fix.
+**Impact:** None now; a latent footgun for the next person to
+add audio.
+
 ## Resolved
 
 ### [P1] Persistence is write-only — saved city is never restored

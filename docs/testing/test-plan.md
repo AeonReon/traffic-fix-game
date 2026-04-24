@@ -174,21 +174,18 @@ run it. Cull the least-valuable checks.
 - [ ] Queue dots at each gate are tinted in the gate's colour
       (sage N / blue S / peach E / lavender W).
 - [ ] Ambient decor (trees, grass, flowers) renders between grid
-      and roads — roads cover it cleanly.
-- [ ] Canvas background uses a warm radial gradient (not flat
-      cream).
-- [ ] Toolbar icons show resting colour tints; active tool is
-      full orange.
+      and roads — roads cover it cleanly; decor placements are
+      stable across reloads (fixed seed).
+- [ ] Canvas background uses a warm radial gradient.
 - [ ] Chevrons render along one-way roads; dashed centre stripe
       renders along two-way roads only.
+- [ ] No NaN / undefined / [object Object] rendered anywhere on
+      canvas or HUD.
 
 ## Camera / touch
 
 - [ ] Two-finger pan moves the view.
-- [ ] Pinch-zoom scales the view, staying anchored around the
-      pinch centre.
-- [ ] One-finger drag on empty space pans (or builds a road,
-      depending on the spec — check whichever is current).
+- [ ] Pinch-zoom scales around the pinch centre.
 - [ ] Snap radii feel right at min zoom and at max zoom.
 
 ## Jam / game state
@@ -197,28 +194,16 @@ run it. Cull the least-valuable checks.
 - [ ] Jam meter drains when queues clear.
 - [ ] No game-over popup fires (sandbox mode).
 - [ ] Pressing Space toggles pause (once Start has been tapped).
-- [ ] Queue dispatches in FIFO order (see known-issue P1 —
-      currently LIFO via `queue.pop()`).
+- [ ] Queue dispatches in FIFO order (known-issue P1 — currently
+      LIFO via `queue.pop()`).
 
-## Visual
+## Mobile / cross-browser
 
-- [ ] No NaN / undefined rendered as text anywhere.
-- [ ] At default zoom, cars are recognizable as cars (post-design-
-      pack Pass A).
-- [ ] Drop shadows are consistent direction on all raised objects
-      (post-design-pack Pass B).
-
-## Mobile / tablet
-
-- [ ] Opens correctly on iPad at portrait and landscape.
-- [ ] HUD doesn't overflow or collide with safe-area insets.
+- [ ] iPad portrait and landscape: HUD + toolbar don't clip safe-
+      area insets.
+- [ ] iOS Safari (primary target) — no console errors, touch works.
+- [ ] Chrome desktop — works as a secondary sanity check.
 - [ ] Toolbar accessible on small phones (iPhone SE width ≤ 380px).
-
-## Cross-browser
-
-- [ ] Works on iOS Safari (primary target).
-- [ ] Works on Chrome desktop.
-- [ ] Works on Firefox desktop.
 
 ---
 

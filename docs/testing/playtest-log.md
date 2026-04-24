@@ -3,6 +3,91 @@
 One paragraph per playtest session. Newest at top. Include: date,
 version tested, what you looked at, what you found.
 
+## 2026-04-24 — backlog-drain pass on v14–v23 (head `4bec233`)
+
+Six ships in a row to catch up on: v14 persistence, v15 orthogonal-
+snap + rectangular cars + delivery bursts, v16 houses-as-origins +
+People HUD, v17 one-way tool + SVG toolbar, v18 score + gate
+colours + ambient decor, v19 pastel cars + gate-tinted queues,
+v20 UI colour pass + floating "+N" popups. Code review only (no
+browser MCP). Read the v14–v20 diffs in sequence, then re-tested
+each still-open bug from the first pass against the current
+`game.js` (now 2183 lines).
+
+**Closed 2 of the 14 original bugs.** P1 persistence-is-write-only
+is **fixed in v14** — `btn-start` now calls `loadState` when
+`hasSavedCity()` returns true, and the splash flips "Start" →
+"Continue" with a "Start fresh" secondary. The P2
+`state.started`-not-set-in-loadState concern is **effectively
+fixed by call-site sequencing**: every `loadState` caller now
+invokes `startGame` right after, which sets `started = true`.
+Moved both to Resolved.
+
+**12 of the original 14 still open.** The two P1s + four P2s I
+filed on v13 are all unchanged in v20: queue still drains LIFO
+(`entry.queue.pop()` at `game.js:891`), undo still leaves orphan
+nodes + split tails, pressure ring still saturates at capacity,
+weighted-dispatch fallback is still uniform — and v16 cloned the
+fallback bug into the new `tryDispatchFromHouse`, so the P2 now
+applies to *two* call sites.
+
+**Nine new bugs filed against v14–v20.** Headliners:
+
+- **P2 new**: one-way toggle can produce double-rendered edges
+  (v17). `toggleOneWay` re-adds a twin with `state.nextEdgeId++`
+  without preserving the odd/even pair invariant `drawRoads` and
+  `findNearestEdge` rely on. Once `nextEdgeId` is odd at the
+  toggle moment, both halves of the pair end up odd → the road
+  body, centre stripe, and shadow all draw twice. Persists across
+  save/load.
+- **P3 new**: one-way toggles don't push to `undoStack` — Undo
+  silently steps past them.
+- **P3 new**: toggling a twin off drops cars currently on that
+  side without re-routing — easy to trigger at demand 2×+.
+- **P3 new**: a corrupted / schema-mismatched save blob never
+  self-clears. `hasSavedCity` still returns true, splash still
+  shows "Continue", clicking it lands in the catch branch and
+  falls through to a fresh start without calling
+  `clearSavedCity` — so the splash is stuck on "Continue" that
+  doesn't continue anything.
+- **P3 new**: 600ms save debounce loses the last action on a
+  fast refresh. No `beforeunload` flush.
+- **P3 new**: HTML title + meta description still reference
+  "Fuengirola" (pre-v3 direction). Splash blurb (v16-stale)
+  doesn't mention that Houses generate their own traffic, so
+  new players miss the whole point of the building.
+- **P4 new**: house spawn timers aren't persisted — after
+  Continue, every house fires in lockstep a few seconds later.
+- **P4 new**: bestScore lives in memory only between Start-fresh
+  and the first save action; hard-refresh in that window loses
+  it.
+
+Test plan bumped to 90 items (target ≤80 — close enough to
+trim another pass later). Added One-way (v17), House-origin
+traffic (v16), Score + bestScore (v18), Visuals (v15–v20)
+sections; rewrote the Persistence section to reflect v14's
+wire-up and cross-ref the new v14 known-issues. Merged the
+stray dead Visual section into the new Visuals one. Dropped the
+Firefox and "one-finger drag on empty" items as low-value.
+
+**Lane note:** v23 (`4bec233`) committed 528 lines of changes
+to `docs/testing/known-issues.md` and 102 lines to
+`docs/testing/test-plan.md` — both files in this session's
+lane. Content matches what I wrote independently this turn
+(the build session appears to have run its own playtest review
+using the same bug list). No rebase conflict because my local
+content was equivalent, but flagging for coordination: the
+Build session should leave `docs/testing/` alone.
+
+Also scanned v21 (explicit Pause), v22 (flow sparkline +
+peak-flow callout), and v23 (sound pass 1) while I was in the
+code. Only two new bugs filed there — a P3 on inconsistent
+audio feedback (only road/bridge builds play a click; block
+placement, one-way toggle, roundabout, erase and undo are
+silent) and a P4 on the `Audio` namespace name shadowing the
+built-in `window.Audio` constructor inside the game's IIFE.
+v21 and v22 both look clean on code review.
+
 ## 2026-04-24 — first playtest pass on v13 (`3777dda`)
 
 No browser MCP available this session — pure static code review of
