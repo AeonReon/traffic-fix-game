@@ -79,6 +79,9 @@
     cars: [],
     nextCarId: 1,
 
+    effects: [],        // ephemeral visual bursts { x, y, startTime, kind }
+
+
     undoStack: [],      // [{ type: 'road' | 'block', ... }]
 
     time: 0,
@@ -308,6 +311,29 @@
     return {
       x: Math.round(x / GRID) * GRID,
       y: Math.round(y / GRID) * GRID
+    };
+  }
+
+  // Snap a drag end point axis-aligned relative to the start. If the drag is
+  // clearly horizontal or vertical (one axis > 1.4× the other) force the
+  // dominant axis only so roads come out perfectly straight. Otherwise snap
+  // to a 45° diagonal with a whole-grid step count. Keeps OCD-minded
+  // players happy and avoids the "slightly angled" road bug.
+  function snapAxisAligned(startPt, endPt) {
+    const dx = endPt.x - startPt.x;
+    const dy = endPt.y - startPt.y;
+    const adx = Math.abs(dx), ady = Math.abs(dy);
+    if (adx > ady * 1.4) {
+      return { x: Math.round(endPt.x / GRID) * GRID, y: startPt.y };
+    }
+    if (ady > adx * 1.4) {
+      return { x: startPt.x, y: Math.round(endPt.y / GRID) * GRID };
+    }
+    // Diagonal — 45° locked to grid steps.
+    const steps = Math.max(1, Math.round(Math.max(adx, ady) / GRID));
+    return {
+      x: startPt.x + (Math.sign(dx) || 1) * steps * GRID,
+      y: startPt.y + (Math.sign(dy) || 1) * steps * GRID
     };
   }
 
@@ -926,10 +952,15 @@
           car.needsReroute = true;
           car.pos = car.path[car.path.length - 1].length - 0.5;
           car.speed = 0;
-          if (block) block.visits++;
+          if (block) {
+            block.visits++;
+            state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'visit' });
+          }
           state.visits++;
         } else {
           state.delivered++;
+          const exit = state.entries.find(ee => ee.id === car.sinkEntryId);
+          if (exit) state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'deliver' });
           toRemove.push(car);
         }
       }
@@ -945,6 +976,11 @@
       if (c.destKind !== 'block' || c.hasVisited) continue;
       const b = state.blocks.find(x => x.id === c.blockId);
       if (b) b.incoming++;
+    }
+
+    // Age out visual effects.
+    if (state.effects.length) {
+      state.effects = state.effects.filter(fx => state.time - fx.startTime < 0.8);
     }
 
     // Jam meter: fills when any entry queue is too long.
@@ -1005,6 +1041,7 @@
     drawBlocks();
     drawEntries();
     drawCars();
+    drawEffects();
     drawDragPreview();
 
     ctx.restore();
@@ -1288,26 +1325,74 @@
   }
 
   function drawCars() {
-    const MIN_R = Math.max(6, 10 * state.view.scale);
+    const scale = state.view.scale;
+    const len = Math.max(20, 24 * scale);
+    const wid = Math.max(11, 13 * scale);
+    const corner = wid * 0.35;
+
     for (const car of state.cars) {
       const e = car.path[car.pathIdx];
       const p = sampleEdge(e, car.pos);
       const s = w2s(p.x, p.y);
-      // Shadow
-      ctx.fillStyle = 'rgba(30, 35, 50, 0.18)';
+      const angle = Math.atan2(p.hy, p.hx);
+
+      ctx.save();
+      ctx.translate(s.sx, s.sy);
+      ctx.rotate(angle);
+
+      // Shadow offset down-right
+      ctx.fillStyle = 'rgba(20, 25, 40, 0.28)';
       ctx.beginPath();
-      ctx.arc(s.sx + 1.2, s.sy + 2, MIN_R * 1.02, 0, Math.PI * 2);
+      roundedRect(-len / 2 + 1.5, -wid / 2 + 2.5, len, wid, corner);
       ctx.fill();
+
       // Body
       ctx.fillStyle = car.color;
       ctx.beginPath();
-      ctx.arc(s.sx, s.sy, MIN_R, 0, Math.PI * 2);
+      roundedRect(-len / 2, -wid / 2, len, wid, corner);
       ctx.fill();
-      // Inner ring for identifiability
-      ctx.strokeStyle = 'rgba(255, 250, 238, 0.6)';
-      ctx.lineWidth = 1.5;
+      // Subtle dark outline
+      ctx.strokeStyle = 'rgba(20, 25, 40, 0.45)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Windshield (front ~30% of body, lighter)
+      const wsLen = len * 0.30;
+      const wsPad = wid * 0.22;
+      ctx.fillStyle = 'rgba(255, 250, 238, 0.42)';
       ctx.beginPath();
-      ctx.arc(s.sx, s.sy, MIN_R * 0.55, 0, Math.PI * 2);
+      roundedRect(len * 0.08, -wid / 2 + wsPad, wsLen, wid - wsPad * 2, 1.5);
+      ctx.fill();
+
+      // Headlight hint — tiny dots at the front corners
+      ctx.fillStyle = 'rgba(255, 240, 200, 0.85)';
+      ctx.beginPath();
+      ctx.arc(len / 2 - 1.2, -wid / 2 + 2.5, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(len / 2 - 1.2,  wid / 2 - 2.5, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+  }
+
+  function drawEffects() {
+    const LIFE = 0.8;
+    for (const fx of state.effects) {
+      const age = state.time - fx.startTime;
+      if (age < 0) continue;
+      const t = Math.min(1, age / LIFE);
+      const p = w2s(fx.x, fx.y);
+      // Ring expands outward, fades.
+      const r = (12 + t * 32) * state.view.scale;
+      const alpha = (1 - t) * 0.6;
+      ctx.strokeStyle = fx.kind === 'deliver'
+        ? `rgba(219, 109, 81, ${alpha})`   // warm orange for exit deliveries
+        : `rgba(79, 161, 106, ${alpha})`;  // calm green for block visits
+      ctx.lineWidth = Math.max(2, 2.5 * state.view.scale * (1 - t * 0.5));
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
       ctx.stroke();
     }
   }
@@ -1318,11 +1403,13 @@
     const aPt = d.snapStart ? { x: d.snapStart.x, y: d.snapStart.y }
               : d.snapStartEdge ? { x: d.snapStartEdge.x, y: d.snapStartEdge.y }
               : d.startWorld;
-    // Free-end preview also snaps to the nearest grid point so the user sees
-    // exactly where the road will land.
+    // Free-end preview axis-aligns to the start (if anchored) and snaps to
+    // grid so the line looks exactly like it'll be built.
     const bPt = d.snapEnd ? { x: d.snapEnd.x, y: d.snapEnd.y }
               : d.snapEndEdge ? { x: d.snapEndEdge.x, y: d.snapEndEdge.y }
-              : snapToGrid(d.cursorWorld.x, d.cursorWorld.y);
+              : (d.snapStart || d.snapStartEdge)
+                    ? snapAxisAligned(aPt, d.cursorWorld)
+                    : snapToGrid(d.cursorWorld.x, d.cursorWorld.y);
     if (!bPt) return;
 
     const startOk = !!(d.snapStart || d.snapStartEdge);
@@ -1583,9 +1670,14 @@
       const startData = d.snapStart ? { node: d.snapStart }
                       : d.snapStartEdge ? { edgePoint: d.snapStartEdge }
                       : null;
+      const startAnchor = d.snapStart ? { x: d.snapStart.x, y: d.snapStart.y }
+                        : d.snapStartEdge ? { x: d.snapStartEdge.x, y: d.snapStartEdge.y }
+                        : null;
       const endData   = d.snapEnd ? { node: d.snapEnd }
                       : d.snapEndEdge ? { edgePoint: d.snapEndEdge }
-                      : { freePoint: snapToGrid(d.cursorWorld.x, d.cursorWorld.y) };
+                      : { freePoint: startAnchor
+                            ? snapAxisAligned(startAnchor, d.cursorWorld)
+                            : snapToGrid(d.cursorWorld.x, d.cursorWorld.y) };
       if (!startData) { toast('Start at a building or on a road'); return; }
       const startPt = startData.node ? startData.node : startData.edgePoint;
       const endPt   = endData.node   ? endData.node
@@ -1647,6 +1739,7 @@
     state.entries = [];
     state.blocks = [];
     state.cars = [];
+    state.effects = [];
     state.undoStack = [];
     state.nextNodeId = 1;
     state.nextEdgeId = 1;

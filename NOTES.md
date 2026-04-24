@@ -9,6 +9,16 @@ Running notes so we don't lose direction between sessions.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v15 (orthogonal drag + Stage E visual pass #1)** —
+  Fixed the "slightly-angled road" bug: road drags with free ends now
+  axis-align to the start. If the drag is clearly horizontal or
+  vertical (>1.4× ratio) the perpendicular axis is forced to match
+  start; otherwise snaps to a 45° grid-stepped diagonal. No more
+  off-axis roads when you just wanted straight ones. First Stage E
+  polish: cars are now oriented rounded rectangles with a windshield
+  and tiny headlight dots (was: coloured circles). Delivery burst
+  effects: green expanding ring at each block visit, warm-orange one
+  at each exit deliver — makes flow completions feel satisfying.
 - **2026-04-24 — v14 (persistence)** — localStorage save-and-restore.
   Every meaningful edit (road, block, erase, undo, roundabout, demand
   slider) triggers a 600ms debounced save. Boot detects a saved city
