@@ -18,9 +18,9 @@
     <div class="splash-card">
       <h1>Traffic Flow</h1>
       <p class="sub">Keep the cars moving</p>
-      <p class="blurb">Cars enter from the four edges (N / S / E / W) and want to drive through the city and exit at a different edge. Drag to build roads. Use the Demand slider up top to control how many cars arrive — turn it down to fix things, crank it up to stress-test.</p>
+      <p class="blurb">Cars enter from the four edges (N / S / E / W) and drive across the city. Drop <b>Houses</b>, <b>Shops</b>, and <b>Malls</b> — cars will visit them, park briefly, then leave. Malls pull in longer queues than shops. Use the <b>Demand</b> slider up top to control how many cars arrive.</p>
       <button id="btn-start" class="primary">Start</button>
-      <p class="hint">One finger drags a road. Two fingers pan and pinch-zoom the map. Tap a 3-way junction with <b>Roundabout</b> to convert it.</p>
+      <p class="hint">One finger drags a road. Two fingers pan and pinch-zoom. Tap a 3-way junction with <b>Roundabout</b> to convert it.</p>
     </div>
   </div>
 
@@ -70,9 +70,17 @@
       <div class="tool-icon">◯</div>
       <div class="tool-label">Roundabout</div>
     </button>
-    <button class="tool" data-tool="block">
+    <button class="tool" data-tool="house">
+      <div class="tool-icon">⌂</div>
+      <div class="tool-label">House</div>
+    </button>
+    <button class="tool" data-tool="shop">
       <div class="tool-icon">▢</div>
-      <div class="tool-label">Block</div>
+      <div class="tool-label">Shop</div>
+    </button>
+    <button class="tool" data-tool="mall">
+      <div class="tool-icon">▣</div>
+      <div class="tool-label">Mall</div>
     </button>
     <button class="tool" data-tool="erase">
       <div class="tool-icon">✕</div>

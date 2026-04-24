@@ -2,6 +2,45 @@
 
 Running notes so we don't lose direction between sessions.
 
+> **What's next:** see `RESEARCH.md` (the other session's roadmap).
+> **Coordination rules:** see `docs/COORDINATION.md`.
+
+## Shipped log
+
+Newest at the top. One line per deploy.
+
+- **2026-04-24 — v12 (Stage A.1)** — Typed buildings: House, Shop, Mall
+  replace the single "Block" tool. Distinct procedural renders per type
+  (pitched-roof cottage, shop with awning, glass-front mall). Different
+  dwell times at each (House 2.6s, Shop 2.0s, Mall 4.0s). Mall is a
+  size-2 building visually. Cars still pick destinations uniformly at
+  random — weighted dispatch by type comes in a follow-up.
+- **2026-04-24 — v11** — Grid system. 60-unit grid, subtle visible dots,
+  road free-endpoints and block placements snap to grid when unanchored.
+  Entries and starter road re-positioned onto grid multiples.
+- **2026-04-24 — v10** — Block tool (placeable destinations with 2.2s
+  park-and-leave), Visits HUD counter, Undo button, bigger 1200×1560
+  portrait map. Hotfix: defined missing `roundedRect` helper + wrapped
+  frame loop in try/catch so single-frame bugs can't permanently hang
+  the sim.
+- **2026-04-24 — v9** — Dropped colour pairs (drivers are drivers).
+  Four N/S/E/W edge gates with pass-through traffic. Manual Demand
+  slider (0×–3×). Two-finger pan on top of pinch-zoom for tablet.
+- **2026-04-24 — v8** — Erase works on any road (removed custom-only
+  restriction). Tap snap radii scaled with zoom. Queue cap per entry.
+- **2026-04-24 — v7** — Free-end road endpoints (dead-end nodes allowed
+  in empty space). Touch-friendly snap radii in screen pixels.
+- **2026-04-24 — v6** — Explicit T-junctions + rejected crossings. Road
+  tool refuses to cross another road; use Bridge to go over, or snap the
+  endpoint directly onto an existing road for a T-junction.
+- **2026-04-24 — v5** — Fixed "bounce backwards" bug in `splitEdgeAtPoint`.
+  Removed game-over gridlock popup (sandbox mode).
+- **2026-04-24 — v4** — Teal pair starts disconnected; Roundabout tool
+  converts 3+ way junctions to counterclockwise one-way rings.
+- **2026-04-24 — v3** — Stripped back to abstract pixel-space, hand-
+  placed houses/shops. Abandoned Fuengirola OSM data (moved to sibling
+  project). Mini-Motorways-style drag-to-build.
+
 ## Two sibling projects
 
 1. **`APPS/traffic-fix/`** — v1, shelved. Loads real OSM data for any lat/lon via

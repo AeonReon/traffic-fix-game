@@ -51,6 +51,13 @@
   const JAM_DRAIN_RATE = 0.06;
   const JAM_FAIL = 1.0;
 
+  // Building types (Stage A.1 — RESEARCH.md).
+  const BUILDING_TYPES = {
+    house: { dwell: 2.6, size: 1, label: 'House' },
+    shop:  { dwell: 2.0, size: 1, label: 'Shop'  },
+    mall:  { dwell: 4.0, size: 2, label: 'Mall'  }
+  };
+
   // ================================================================
   // State
   // ================================================================
@@ -419,10 +426,9 @@
     return { ok: true };
   }
 
-  // Place a building block. Pass a world-coord point; if it's near an existing
-  // node or road, snap to it (so the block is automatically reachable); else
-  // create a free node (player must build a road to it).
-  function placeBlock(wx, wy) {
+  // Place a building. `type` is one of BUILDING_TYPES keys.
+  function placeBlock(wx, wy, type = 'shop') {
+    const spec = BUILDING_TYPES[type] || BUILDING_TYPES.shop;
     const sn = snapRadii();
     const nodeSnap = findNearestNode(wx, wy, sn.node * 1.3);
     const edgeSnap = !nodeSnap ? findNearestEdgePoint(wx, wy, sn.edge * 1.3) : null;
@@ -432,16 +438,17 @@
     else if (edgeSnap) node = splitEdgeAtPoint(edgeSnap.edge, edgeSnap.x, edgeSnap.y);
     else node = makeNode(wx, wy);
 
-    // Don't place a block on top of an entry node.
     if (node.entry) return { ok: false, reason: 'Can\'t place on a gate' };
-    // Don't double-place on the same node.
-    if (state.blocks.some(b => b.nodeId === node.id)) return { ok: false, reason: 'Block already here' };
+    if (state.blocks.some(b => b.nodeId === node.id)) return { ok: false, reason: 'Building already here' };
 
     const block = {
       id: state.nextBlockId++,
+      type,
       x: node.x, y: node.y,
       nodeId: node.id,
-      visits: 0
+      visits: 0,
+      dwell: spec.dwell,
+      size: spec.size
     };
     state.blocks.push(block);
     rebuildAdjacency();
@@ -796,13 +803,15 @@
       }
       if (car.pathIdx >= car.path.length - 1 && car.pos >= car.path[car.path.length - 1].length) {
         if (car.destKind === 'block' && !car.hasVisited) {
-          // Reached a block — park here briefly, then head out via a random exit.
+          // Reached a building — park here for the type's dwell time, then head
+          // out via a random exit.
           car.hasVisited = true;
-          car.pauseUntil = state.time + 2.2;
+          const block = state.blocks.find(b => b.id === car.blockId);
+          const dwell = block ? block.dwell : 2.2;
+          car.pauseUntil = state.time + dwell;
           car.needsReroute = true;
           car.pos = car.path[car.path.length - 1].length - 0.5;
           car.speed = 0;
-          const block = state.blocks.find(b => b.id === car.blockId);
           if (block) block.visits++;
           state.visits++;
         } else {
@@ -960,33 +969,111 @@
   }
 
   function drawBlocks() {
-    const palette = ['#d4b68a', '#c6a18f', '#a8b890', '#b8c4a8', '#c8a881'];
     for (const b of state.blocks) {
       const p = w2s(b.x, b.y);
-      const r = 26 * state.view.scale;
-      // Shadow
+      const s = state.view.scale;
+      const type = b.type || 'shop';
+      // Shadow common to all types.
+      const sizeMul = b.size === 2 ? 1.5 : 1;
       ctx.fillStyle = 'rgba(30, 35, 50, 0.18)';
       ctx.beginPath();
-      ctx.ellipse(p.sx + 2, p.sy + 5 * state.view.scale, r * 0.85, r * 0.35, 0, 0, Math.PI * 2);
+      ctx.ellipse(p.sx + 2, p.sy + 5 * s, 26 * s * sizeMul, 10 * s * sizeMul, 0, 0, Math.PI * 2);
       ctx.fill();
-      // Building — soft rounded rectangle
-      const col = palette[b.id % palette.length];
-      ctx.fillStyle = col;
-      ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      roundedRect(p.sx - r * 0.85, p.sy - r * 0.85, r * 1.7, r * 1.7, r * 0.22);
-      ctx.fill();
-      ctx.stroke();
-      // Roof accent
-      ctx.fillStyle = 'rgba(30, 35, 50, 0.25)';
-      ctx.fillRect(p.sx - r * 0.85, p.sy - r * 0.85, r * 1.7, r * 0.22);
-      // Small window row
-      ctx.fillStyle = 'rgba(255, 250, 238, 0.7)';
-      for (let i = 0; i < 3; i++) {
-        ctx.fillRect(p.sx - r * 0.58 + i * r * 0.4, p.sy - r * 0.1, r * 0.22, r * 0.25);
-      }
+
+      if (type === 'house') drawHouse(p.sx, p.sy, s);
+      else if (type === 'mall') drawMall(p.sx, p.sy, s);
+      else drawShop(p.sx, p.sy, s);
     }
+  }
+
+  function drawHouse(cx, cy, s) {
+    const w = 40 * s, h = 34 * s;
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
+    ctx.lineWidth = 1.5;
+    // Body
+    ctx.fillStyle = '#f0dbb2';
+    ctx.beginPath();
+    roundedRect(cx - w / 2, cy - h / 2 + 6 * s, w, h - 6 * s, 3 * s);
+    ctx.fill(); ctx.stroke();
+    // Pitched roof triangle
+    ctx.fillStyle = '#8a5c3e';
+    ctx.beginPath();
+    ctx.moveTo(cx - w / 2 - 3 * s, cy - h / 2 + 6 * s);
+    ctx.lineTo(cx, cy - h / 2 - 8 * s);
+    ctx.lineTo(cx + w / 2 + 3 * s, cy - h / 2 + 6 * s);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    // Door
+    ctx.fillStyle = '#6b4a2f';
+    ctx.fillRect(cx - 4 * s, cy + 2 * s, 8 * s, 12 * s);
+    // Window
+    ctx.fillStyle = 'rgba(255, 250, 238, 0.85)';
+    ctx.fillRect(cx - 14 * s, cy + 2 * s, 7 * s, 7 * s);
+    ctx.fillRect(cx + 7 * s,  cy + 2 * s, 7 * s, 7 * s);
+  }
+
+  function drawShop(cx, cy, s) {
+    const w = 42 * s, h = 38 * s;
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
+    ctx.lineWidth = 1.5;
+    // Body
+    ctx.fillStyle = '#c7a88c';
+    ctx.beginPath();
+    roundedRect(cx - w / 2, cy - h / 2, w, h, 5 * s);
+    ctx.fill(); ctx.stroke();
+    // Roof strip
+    ctx.fillStyle = 'rgba(30, 35, 50, 0.32)';
+    ctx.fillRect(cx - w / 2, cy - h / 2, w, 7 * s);
+    // Awning across the front
+    ctx.fillStyle = '#db6d51';
+    const ay = cy - 2 * s, ah = 6 * s;
+    ctx.fillRect(cx - w / 2, ay, w, ah);
+    // Zigzag edge under awning
+    ctx.beginPath();
+    ctx.moveTo(cx - w / 2, ay + ah);
+    for (let i = 0; i < 8; i++) {
+      const x = cx - w / 2 + (w / 8) * (i + 0.5);
+      ctx.lineTo(x, ay + ah + 3 * s);
+      ctx.lineTo(cx - w / 2 + (w / 8) * (i + 1), ay + ah);
+    }
+    ctx.fillStyle = '#db6d51';
+    ctx.fill();
+    // Display window
+    ctx.fillStyle = 'rgba(255, 250, 238, 0.85)';
+    ctx.fillRect(cx - w / 2 + 5 * s, cy + 6 * s, w - 10 * s, h / 2 - 8 * s);
+  }
+
+  function drawMall(cx, cy, s) {
+    const w = 64 * s, h = 42 * s;
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
+    ctx.lineWidth = 1.5;
+    // Main body
+    ctx.fillStyle = '#b0b8c4';
+    ctx.beginPath();
+    roundedRect(cx - w / 2, cy - h / 2, w, h, 4 * s);
+    ctx.fill(); ctx.stroke();
+    // Darker roof slab
+    ctx.fillStyle = 'rgba(30, 35, 50, 0.28)';
+    ctx.fillRect(cx - w / 2, cy - h / 2, w, 8 * s);
+    // Big glass front
+    ctx.fillStyle = 'rgba(210, 230, 245, 0.88)';
+    ctx.fillRect(cx - w / 2 + 5 * s, cy - h / 2 + 12 * s, w - 10 * s, h - 18 * s);
+    // Mullions (vertical dividers)
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.35)';
+    ctx.lineWidth = 1.2;
+    for (let i = 1; i < 5; i++) {
+      const x = cx - w / 2 + (w / 5) * i;
+      ctx.beginPath();
+      ctx.moveTo(x, cy - h / 2 + 12 * s);
+      ctx.lineTo(x, cy + h / 2 - 6 * s);
+      ctx.stroke();
+    }
+    // "M" glyph
+    ctx.fillStyle = '#2a2f3c';
+    ctx.font = `bold ${Math.max(10, 14 * s)}px -apple-system, "SF Pro Rounded", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('M', cx, cy - h / 2 + 4 * s);
   }
 
   function drawEntries() {
@@ -1181,8 +1268,10 @@
       if (e.key === '1') setTool('road');
       if (e.key === '2') setTool('bridge');
       if (e.key === '3') setTool('roundabout');
-      if (e.key === '4') setTool('block');
-      if (e.key === '5') setTool('erase');
+      if (e.key === '4') setTool('house');
+      if (e.key === '5') setTool('shop');
+      if (e.key === '6') setTool('mall');
+      if (e.key === '7') setTool('erase');
       if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
         document.getElementById('btn-undo').click();
         e.preventDefault();
@@ -1354,16 +1443,17 @@
       toast('Roundabout built');
     }
 
-    if (isTap && state.tool === 'block') {
+    if (isTap && (state.tool === 'house' || state.tool === 'shop' || state.tool === 'mall')) {
       const world = s2w(p.startX, p.startY);
       // If not snapping to existing network, fall back to the nearest grid point.
       const sn = snapRadii();
       const nodeHit = findNearestNode(world.x, world.y, sn.node * 1.3);
       const edgeHit = !nodeHit ? findNearestEdgePoint(world.x, world.y, sn.edge * 1.3) : null;
       const pt = (nodeHit || edgeHit) ? world : snapToGrid(world.x, world.y);
-      const res = placeBlock(pt.x, pt.y);
+      const res = placeBlock(pt.x, pt.y, state.tool);
       if (!res.ok) return toast(res.reason);
-      toast('Block placed');
+      const label = BUILDING_TYPES[state.tool].label;
+      toast(`${label} placed`);
     }
   }
 
