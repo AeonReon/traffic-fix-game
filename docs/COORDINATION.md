@@ -1,6 +1,7 @@
 # Session coordination — quick reference
 
-Two Claude Code sessions work on this project in parallel.
+Three Claude Code sessions work on this project in parallel. Each owns
+a disjoint set of files — no session writes to another's lane.
 
 ## Where things live
 
@@ -20,7 +21,12 @@ Two Claude Code sessions work on this project in parallel.
   Appends one-liner to NOTES.md "Shipped log" after every deploy.
 - **RESEARCH session**: markdown only. Owns RESEARCH.md, updates Stage
   status checkboxes when informed of ships, adds detail as the build
-  progresses, proposes next moves.
+  progresses, proposes next moves. Also owns `docs/research/`.
+- **PLAYTEST session**: testing + bug tracking only. Owns
+  `docs/testing/`. Reads code + diffs to find bugs; files reports in
+  `docs/testing/known-issues.md`; maintains `test-plan.md` regression
+  checklist. Never edits code or research docs. See
+  `docs/testing/README.md` for its full brief.
 
 No merge conflicts possible — sessions write disjoint files.
 
