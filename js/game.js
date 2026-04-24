@@ -13,6 +13,18 @@
   const LOGICAL_H = 1560;
   const GRID = 60;           // grid spacing in world units
 
+  // Day/night cycle — one full day lasts DAY_LENGTH simulated seconds.
+  // Keyframes interpolate the tint overlay colour + alpha across the day.
+  const DAY_LENGTH = 90;
+  const DAY_PHASES = [
+    { t: 0.00, r: 180, g: 200, b: 230, a: 0.15 },  // Dawn — cool cyan
+    { t: 0.18, r:   0, g:   0, b:   0, a: 0.00 },  // Late morning — clear
+    { t: 0.55, r:   0, g:   0, b:   0, a: 0.00 },  // Mid-afternoon — clear
+    { t: 0.70, r: 230, g: 130, b:  80, a: 0.22 },  // Dusk — warm orange
+    { t: 0.85, r:  36, g:  56, b: 104, a: 0.42 },  // Midnight — deep blue
+    { t: 1.00, r: 180, g: 200, b: 230, a: 0.15 }   // Wrap back to dawn
+  ];
+
   // Cars get a cheerful pastel mix. The player is watching these things move
   // around — giving them life is the single biggest visual-feel lever.
   const CAR_COLOR = '#5d6470';   // fallback / neutral for queue dots
@@ -1239,6 +1251,31 @@
     drawEffects();
     drawDragPreview();
 
+    // Day/night tint — applied across the whole canvas in screen coords,
+    // then sparse stars are drawn on top (so the dark overlay doesn't cover
+    // them).
+    const tint = currentTint();
+    if (tint.a > 0.005) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = `rgba(${tint.r | 0}, ${tint.g | 0}, ${tint.b | 0}, ${tint.a})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Stars fade in once the night tint crosses 0.22 alpha.
+      if (tint.a > 0.22 && state.stars) {
+        const starAlpha = Math.min(0.8, (tint.a - 0.22) * 4);
+        ctx.scale(state.view.dpr, state.view.dpr);
+        for (const star of state.stars) {
+          const p = w2s(star.x, star.y);
+          if (p.sx < -2 || p.sx > state.view.w + 2 || p.sy < -2 || p.sy > state.view.h + 2) continue;
+          const tw = 0.7 + 0.3 * Math.sin(state.time * 1.2 + star.twinkle * 6.28);
+          ctx.fillStyle = `rgba(255, 245, 205, ${starAlpha * tw})`;
+          ctx.beginPath();
+          ctx.arc(p.sx, p.sy, star.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
     ctx.restore();
   }
 
@@ -1321,6 +1358,39 @@
   // Ambient decoration — sparse trees / grass tufts in "empty land" so the
   // canvas doesn't feel like a blank page. Generated ONCE per level with a
   // fixed seed so placements are stable across reloads.
+  // Pre-seed stars once at boot — same pattern every session.
+  function generateStars() {
+    state.stars = [];
+    let seed = 2024;
+    const rand = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    for (let i = 0; i < 70; i++) {
+      state.stars.push({
+        x: rand() * LOGICAL_W,
+        y: rand() * LOGICAL_H * 0.6,   // cluster stars in the upper 60% of the sky
+        size: 0.7 + rand() * 1.0,
+        twinkle: rand()
+      });
+    }
+  }
+
+  function currentTint() {
+    const f = ((state.time % DAY_LENGTH) + DAY_LENGTH) % DAY_LENGTH / DAY_LENGTH;
+    for (let i = 0; i < DAY_PHASES.length - 1; i++) {
+      const p1 = DAY_PHASES[i], p2 = DAY_PHASES[i + 1];
+      if (f >= p1.t && f <= p2.t) {
+        const span = p2.t - p1.t || 1;
+        const k = (f - p1.t) / span;
+        return {
+          r: p1.r + (p2.r - p1.r) * k,
+          g: p1.g + (p2.g - p1.g) * k,
+          b: p1.b + (p2.b - p1.b) * k,
+          a: p1.a + (p2.a - p1.a) * k
+        };
+      }
+    }
+    return DAY_PHASES[0];
+  }
+
   function generateDecor() {
     state.decor = [];
     let seed = 1337;
@@ -2397,6 +2467,7 @@
     resizeCanvas();
     buildLevel();
     generateDecor();
+    generateStars();
     configureSplash();
     setupInput();
     requestAnimationFrame(frame);

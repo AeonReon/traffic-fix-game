@@ -5,7 +5,7 @@ Running notes so we don't lose direction between sessions.
 > **What's next:** see `RESEARCH.md` (the other session's roadmap).
 > **Coordination rules:** see `docs/COORDINATION.md`.
 
-## Current features (what the player can do today — v23)
+## Current features (what the player can do today — v24)
 
 Single source of truth for "what this game actually is right now."
 Update this list whenever a user-visible feature ships or is cut.
@@ -63,6 +63,9 @@ Update this list whenever a user-visible feature ships or is cut.
 - Seeded ambient decor: tree canopies, grass tufts, flower patches
   with small yellow centres — rendered below roads so built-up areas
   stay clean.
+- **Day / night cycle** — 90-second loop shades the whole scene
+  through dawn cyan → clear midday → warm dusk → deep-blue night
+  with sparse twinkling stars fading in.
 
 **Mobile-friendly**
 - 1-finger drag = build.
@@ -80,6 +83,15 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v24 (A5: day/night tint + stars)** — 90-second
+  cycle loops the whole scene through dawn (cool cyan, α 0.15) →
+  clear midday (α 0) → warm dusk (orange, α 0.22) → deep-blue
+  midnight (α 0.42) → back to dawn. Six-keyframe linear interpolation.
+  Overlay drawn after all gameplay layers in screen coords so it
+  tints buildings and cars too. 70 seeded stars scatter across the
+  upper 60% of the sky; each fades in once night alpha crosses 0.22
+  and slow-twinkles on its own phase offset. Pause freezes the cycle
+  too since `state.time` stops advancing.
 - **2026-04-24 — v23 (A3: sound pass 1)** — Shipped Pass 1 of
   `docs/research/sound.md`. Web Audio API, lazy-init on Start button
   (required for iOS Safari). No audio files — everything synthesised.
