@@ -278,6 +278,36 @@ html, body {
 #btn-undo                     .tool-icon { color: #6c7380; }
 .tool-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
 
+/* Paused overlay — subtle cream wash + centered "Paused" pill. Doesn't block
+   interactions so the player can still edit roads/buildings while paused. */
+.paused-overlay {
+  position: absolute; inset: 0;
+  background: rgba(244, 234, 213, 0.22);
+  pointer-events: none;
+  display: none;
+  z-index: 20;
+}
+.paused-overlay.show { display: block; }
+.paused-pill {
+  position: absolute;
+  top: calc(84px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: white;
+  padding: 7px 18px;
+  border-radius: 999px;
+  font-size: 12px; font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  box-shadow: 0 6px 18px rgba(219, 109, 81, 0.4);
+  animation: pillBreathe 2.4s ease-in-out infinite;
+}
+@keyframes pillBreathe {
+  0%, 100% { transform: translateX(-50%) scale(1); }
+  50%      { transform: translateX(-50%) scale(1.04); }
+}
+
 .toast {
   position: absolute; bottom: 96px; left: 50%; transform: translateX(-50%);
   background: var(--ink); color: var(--bg);

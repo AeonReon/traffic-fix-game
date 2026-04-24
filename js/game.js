@@ -2085,6 +2085,8 @@
     document.getElementById('splash').classList.add('hidden');
     document.getElementById('hud').classList.remove('hidden');
     document.getElementById('toolbar').classList.remove('hidden');
+    document.getElementById('paused-overlay').classList.remove('show');
+    document.getElementById('btn-pause').textContent = '⏸';
     state.paused = false;
     state.started = true;
     // Sync demand slider to state (restored or default).
@@ -2123,6 +2125,7 @@
     if (!state.started || state.over) return;
     state.paused = !state.paused;
     document.getElementById('btn-pause').textContent = state.paused ? '▶' : '⏸';
+    document.getElementById('paused-overlay').classList.toggle('show', state.paused);
   }
 
   function updateHud() {

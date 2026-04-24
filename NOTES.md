@@ -5,10 +5,83 @@ Running notes so we don't lose direction between sessions.
 > **What's next:** see `RESEARCH.md` (the other session's roadmap).
 > **Coordination rules:** see `docs/COORDINATION.md`.
 
+## Current features (what the player can do today — v21)
+
+Single source of truth for "what this game actually is right now."
+Update this list whenever a user-visible feature ships or is cut.
+
+**Building**
+- Drag roads between any two points (orthogonal / 45° snap to grid)
+- Build **Bridges** over existing roads (crossings are rejected for
+  regular Roads — Bridge is the explicit tool)
+- Convert a 3+ way junction to a **Roundabout** (one-way ring)
+- Toggle a road to **One-way** (chevrons along the road show direction)
+- **Erase** any road
+- **Undo** last road / block placement (one level)
+
+**Placeable buildings**
+- **House** — residential origin (spawns cars every ~5.5s scaled by
+  demand). 2 "people" per house on HUD. Dwell 2.6s, +1 score per
+  visit.
+- **Shop** — destination. Dwell 2.0s, +2 score per visit.
+- **Mall** — size-2 destination. Dwell 4.0s, +3 score per visit.
+
+**Traffic**
+- 4 edge gates (N / S / E / W, each their own pastel colour) spawn
+  through-traffic. Cars pick destination category (Mall 40 / Shop 30 /
+  House 5 / Exit 25) and route via Dijkstra at spawn time.
+- Houses also generate traffic to Mall 40 / Shop 30 / Exit 30.
+- Cars visit a building, park the dwell time, then reroute to a
+  random exit gate. Never loop back to their source.
+
+**Feedback**
+- Big **Score** stat (HUD, orange); **Best score** persisted under it.
+- **People** count (houses × 2, sage).
+- **Flow** per-minute (dusty blue).
+- **Jam** meter (green → amber → red).
+- Per-building **pressure rings** (green → amber → red based on
+  incoming-car count vs capacity).
+- Green **visit** burst + orange **delivery** burst + floating **+N**
+  points popup on every scoring event.
+- **Explicit Pause** (space / pause button) — sim fully frozen with a
+  subtle cream overlay and centered "Paused" pill. Edits still work.
+
+**Manual control**
+- **Demand slider** 0× to 3× (turn off to plan, crank to stress-test).
+- **Start fresh** button clears saved city.
+
+**Persistence**
+- Whole network, buildings, settings and scores auto-save on edit
+  (debounced 600ms). Splash shows Continue / Start fresh on return.
+
+**Map & decor**
+- Portrait 1200×1560 logical world; pastel radial-gradient paper
+  background.
+- Subtle 60-unit grid dots.
+- Seeded ambient decor: tree canopies, grass tufts, flower patches
+  with small yellow centres — rendered below roads so built-up areas
+  stay clean.
+
+**Mobile-friendly**
+- 1-finger drag = build.
+- 2-finger drag = pan; pinch = zoom.
+- Touch-scaled snap radii.
+
 ## Shipped log
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v21 (A1: explicit Pause)** — Proper pause. Tapping
+  the pause icon or pressing Space freezes the sim entirely — cars
+  stop, spawning stops, pressure rings stop changing, timers stop.
+  A subtle cream-wash overlay fades in across the whole map and a
+  terracotta "Paused" pill slow-breathes at top-centre to make the
+  state unmissable. The overlay doesn't block interactions so you
+  can still edit roads and place buildings while paused — Pause
+  becomes the primary planning mode.
+  Also added: `## Current features` section at the top of NOTES.md
+  per B4, a single source of truth for "what this game is right
+  now."
 - **2026-04-24 — v20 (interface colour pass + point popups)** —
   HUD, toolbar and splash panels got a warm peach-gradient background
   and a four-gate accent stripe across the top (sage / blue / peach /
