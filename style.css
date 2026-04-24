@@ -28,7 +28,13 @@ html, body {
   touch-action: none;
 }
 
-#app { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+#app {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;            /* dynamic viewport on iOS to avoid URL-bar crop */
+  overflow: hidden;
+}
 
 #stage {
   position: absolute; inset: 0; display: block; width: 100%; height: 100%;
@@ -101,7 +107,9 @@ html, body {
 
 /* HUD top-bar */
 #hud {
-  top: 14px; left: 14px; right: 14px;
+  top: 14px;
+  top: calc(14px + env(safe-area-inset-top));
+  left: 14px; right: 14px;
   display: flex; align-items: center; gap: 14px;
 }
 .hud-left { display: flex; align-items: center; gap: 20px; }
@@ -136,22 +144,26 @@ html, body {
 
 /* Toolbar */
 #toolbar {
-  left: 14px; bottom: 14px;
-  display: flex; gap: 6px; padding: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 14px;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  display: flex; gap: 8px; padding: 10px;
 }
 .tool {
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  background: rgba(42, 47, 60, 0.03); border: 2px solid transparent;
-  border-radius: 12px; padding: 10px 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  background: rgba(42, 47, 60, 0.05); border: 2px solid transparent;
+  border-radius: 14px; padding: 12px 14px;
   font-size: 11px; font-weight: 700; color: var(--ink-soft);
-  cursor: pointer; min-width: 62px;
+  cursor: pointer; min-width: 72px; min-height: 64px;
+  -webkit-tap-highlight-color: transparent;
   transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
 }
-.tool:hover { background: rgba(42, 47, 60, 0.08); color: var(--ink); }
+.tool:hover { background: rgba(42, 47, 60, 0.1); color: var(--ink); }
 .tool:active { transform: translateY(1px); }
-.tool.active { background: var(--accent); border-color: var(--accent); color: white; }
+.tool.active { background: var(--accent); border-color: var(--accent); color: white; box-shadow: 0 4px 14px rgba(219, 109, 81, 0.35); }
 .tool.active .tool-label { color: white; }
-.tool-icon { font-size: 22px; line-height: 1; color: var(--ink); }
+.tool-icon { font-size: 24px; line-height: 1; color: var(--ink); }
 .tool.active .tool-icon { color: white; }
 .tool-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
 
@@ -171,10 +183,29 @@ html, body {
 @media (max-width: 640px) {
   .splash-card { padding: 26px 22px; }
   .splash-card h1 { font-size: 26px; }
-  .hud-left { gap: 12px; }
+  #hud { gap: 10px; padding: 10px 12px; }
+  .hud-left { gap: 10px; }
   .stat .v { font-size: 16px; }
-  .jam-meter-wrap { max-width: none; }
-  #toolbar { left: 10px; right: 10px; justify-content: center; overflow-x: auto; }
-  .tool { min-width: 56px; padding: 8px 10px; }
-  .tool-icon { font-size: 18px; }
+  .stat .k { font-size: 9px; }
+  .jam-meter-wrap { max-width: none; min-width: 60px; }
+  .jam-meter-label { font-size: 9px; }
+  #toolbar {
+    left: 10px; right: 10px;
+    transform: none;
+    justify-content: space-between;
+    gap: 4px; padding: 8px;
+  }
+  .tool {
+    flex: 1; min-width: 0;
+    padding: 10px 4px;
+    min-height: 58px;
+  }
+  .tool-icon { font-size: 22px; }
+  .tool-label { font-size: 9px; }
+}
+
+/* Very narrow (iPhone SE etc.) */
+@media (max-width: 380px) {
+  .hud-left .stat:nth-child(3) { display: none; }
+  .tool-label { display: none; }
 }

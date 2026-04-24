@@ -18,8 +18,8 @@
   const SIGNAL_GREEN = 14;
   const SIGNAL_YELLOW = 2.5;
 
-  const DEMAND_START = 0.35;          // cars/second at game start
-  const DEMAND_RAMP_PER_SEC = 0.008;  // demand grows steadily
+  const DEMAND_START = 0.55;          // cars/second at game start (noticeable trickle)
+  const DEMAND_RAMP_PER_SEC = 0.010;  // demand grows steadily
   const DEMAND_MAX = 3.0;
 
   const JAM_QUEUE_THRESHOLD = 70;     // queued cars beyond this = bad
@@ -799,13 +799,16 @@
   }
 
   function fitToNetwork(pad = 40) {
-    const { minX, minY, maxX, maxY } = state.net.bbox;
-    const w = maxX - minX, h = maxY - minY;
-    const sx = (state.view.w - pad * 2) / Math.max(1, w);
-    const sy = (state.view.h - pad * 2) / Math.max(1, h);
+    // Fit to the interesting part of the network rather than the entire bbox.
+    // The A-7 stretches ~1.5 km N-S which is too elongated for a phone view.
+    // Focus on a ±280 m window around origin (the interchange itself).
+    const CORE = 280;
+    const w = CORE * 2, h = CORE * 2.2;
+    const sx = (state.view.w - pad * 2) / w;
+    const sy = (state.view.h - pad * 2) / h;
     state.view.scale = Math.min(sx, sy);
-    state.view.originX = (minX + maxX) / 2;
-    state.view.originY = (minY + maxY) / 2;
+    state.view.originX = 40;       // a hair east to center on the interchange
+    state.view.originY = 120;      // a hair south: pulls the A-7 entrance exit junctions on screen
   }
 
   function w2s(x, y) {
@@ -1018,13 +1021,17 @@
   }
 
   function drawCars() {
+    // On small screens, force cars to a visible minimum. Without this, at a
+    // fit-to-network zoom on a phone, a 4.5 m car is about 2 px long.
+    const MIN_CAR_LEN = Math.max(10, Math.min(16, state.view.w / 40));
+    const MIN_CAR_WID = MIN_CAR_LEN * 0.5;
     for (const car of state.cars) {
       const e = car.path[car.pathIdx];
       const p = sampleEdge(e, car.pos);
       const s = w2s(p.x, p.y);
       const ang = Math.atan2(p.hy, p.hx);
-      const len = Math.max(5, car.length * state.view.scale);
-      const wid = Math.max(3.5, 2.0 * state.view.scale);
+      const len = Math.max(MIN_CAR_LEN, car.length * state.view.scale * 1.3);
+      const wid = Math.max(MIN_CAR_WID, 2.3 * state.view.scale);
       ctx.save();
       ctx.translate(s.sx, s.sy);
       ctx.rotate(ang);
@@ -1291,6 +1298,10 @@
     document.getElementById('toolbar').classList.remove('hidden');
     state.paused = false;
     state.started = true;
+    // Seed the scene with a handful of cars so it's immediately alive.
+    for (let i = 0; i < 12; i++) spawnCar();
+    // Advance a couple of sim seconds so the seeded cars aren't all bunched at pos 0.
+    for (let i = 0; i < 80; i++) stepSim(0.05);
   }
   function restart() {
     document.getElementById('gameover').classList.add('hidden');
