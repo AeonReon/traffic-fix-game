@@ -1,73 +1,132 @@
-// Traffic Flow — Fuengirola
-// Single-file game: sim + render + interact + loop.
-// Style: Mini-Motorways-ish. Real Fuengirola road skeleton as the baseline.
+// Traffic Flow — v3
+// Ultra-simple Mini-Motorways-style sandbox.
+// Hand-placed houses and shops in pixel space. No map data. No confetti.
+// Core loop: watch cars flow, drag to add roads, watch new flow emerge.
 
 (() => {
   // ================================================================
-  // Tuning
+  // Level — pure pixel coords, fits into a logical 1200×800 space.
+  // The renderer scales this to whatever screen it's on.
   // ================================================================
-  const CAR_LEN = 4.5;          // metres
-  const MIN_GAP = 2.0;
-  const TIME_HEADWAY = 1.3;
-  const ACCEL_MAX = 2.0;
-  const BRAKE_COMF = 2.5;
-  const BRAKE_HARD = 7.0;
-  const IDM_DELTA = 4;
-  const LANE_WIDTH_M = 3.5;
+  const LOGICAL_W = 1200;
+  const LOGICAL_H = 800;
 
-  const SIGNAL_GREEN = 14;
-  const SIGNAL_YELLOW = 2.5;
+  // Colours for houses/shops (matched pairs).
+  const PALETTE = [
+    { name: 'coral',  house: '#db6d51', shop: '#c95a3e', car: '#e48875' },
+    { name: 'teal',   house: '#3b82a8', shop: '#2a6d90', car: '#5aa3c9' },
+    { name: 'olive',  house: '#6a8f3d', shop: '#567230', car: '#8fae61' },
+    { name: 'ochre',  house: '#d29237', shop: '#b87726', car: '#e8b266' }
+  ];
 
-  const DEMAND_START = 0.55;          // cars/second at game start (noticeable trickle)
-  const DEMAND_RAMP_PER_SEC = 0.010;  // demand grows steadily
-  const DEMAND_MAX = 3.0;
+  // Buildings. `kind` is 'house' or 'shop'. `color` indexes PALETTE.
+  // Laid out so the starting scene has two clean parallel corridors,
+  // with extra destinations on either side to reward new roads later.
+  const LEVEL = {
+    buildings: [
+      { id: 1, kind: 'house', color: 0, x:  90, y: 280 },
+      { id: 2, kind: 'shop',  color: 0, x: 1110, y: 280 },
+      { id: 3, kind: 'house', color: 1, x:  90, y: 520 },
+      { id: 4, kind: 'shop',  color: 1, x: 1110, y: 520 }
+    ],
+    // Pre-built starter roads so the screen is alive from frame 1.
+    starterRoads: [
+      { a: { x:  90, y: 280 }, b: { x: 1110, y: 280 } },
+      { a: { x:  90, y: 520 }, b: { x: 1110, y: 520 } }
+    ]
+  };
 
-  const JAM_QUEUE_THRESHOLD = 70;     // queued cars beyond this = bad
-  const JAM_FILL_RATE = 0.10;         // per second of jam, fill meter
-  const JAM_DRAIN_RATE = 0.05;        // per second of no jam, drain meter
-  const JAM_FAIL_AT = 1.0;
+  // Cars and physics (pixel units, pixels per second)
+  const CAR_RADIUS = 11;
+  const CAR_GAP = 4;                      // visible gap between car centres extra to radius
+  const CAR_SPEED = 110;                  // max pixels per second
+  const CAR_FOLLOW_TRIGGER = 42;          // start following at this gap
+  const CAR_STOP_GAP = 28;                // stop if leader is this close
 
-  const CAR_COLORS = ['#db6d51', '#3b82a8', '#e8a13a', '#4fa16a', '#a065c3', '#c24a3d', '#5a86c9'];
+  const SPAWN_INTERVAL_START = 1.6;       // seconds between cars per house (relaxed)
+  const SPAWN_INTERVAL_END = 0.55;        // how fast at peak demand
+  const DEMAND_RAMP_SECS = 180;           // how long until peak
+
+  const QUEUE_FAIL_SIZE = 9;              // fail when a house has this many waiting
+  const JAM_FILL_RATE = 0.14;
+  const JAM_DRAIN_RATE = 0.06;
+  const JAM_FAIL = 1.0;
 
   // ================================================================
   // State
   // ================================================================
   const state = {
-    net: null,             // { nodes: Map<id, node>, edges: [edge], origin, bbox }
+    buildings: [],      // { id, kind, color, x, y, queue: Car[] }
+    nodes: new Map(),   // id -> { id, x, y, building? }
+    edges: [],          // { id, from, to, shape:[{x,y},..], length }
+    adjacency: new Map(),
+    nextNodeId: 1,
+    nextEdgeId: 1,
+
     cars: [],
     nextCarId: 1,
+
     time: 0,
     paused: true,
     started: false,
     over: false,
-    demand: DEMAND_START,
-    spawnAccum: 0,
-    completed: 0,
-    throughputLog: [],
+    delivered: 0,
     jamMeter: 0,
-    signalState: new Map(),
-    approaches: new Map(),
 
-    // Camera
-    view: {
-      scale: 1.6,
-      originX: 0, originY: 0,
-      dpr: window.devicePixelRatio || 1
-    },
+    // Camera / view fitted to LOGICAL coords
+    view: { scale: 1, originX: LOGICAL_W / 2, originY: LOGICAL_H / 2, dpr: window.devicePixelRatio || 1 },
 
-    // Interaction
     tool: 'road',
     pointers: new Map(),
     pinch: null,
-    dragging: null,       // { startWorld, snapStartNode, cursorWorld, snapEndNode, isBridge }
-    hover: null,          // { node?, edge? }
+    dragging: null,     // { startWorld, snapStart, cursorWorld, snapEnd, isBridge }
     panActive: false,
-    panFrom: null
+    panFrom: null,
+    hover: null
   };
 
   // ================================================================
-  // Geometry helpers
+  // Network helpers
   // ================================================================
+  function makeNode(x, y, opts = {}) {
+    const n = { id: state.nextNodeId++, x, y, building: opts.building || null };
+    state.nodes.set(n.id, n);
+    return n;
+  }
+
+  function makeEdge(fromNode, toNode, opts = {}) {
+    const shape = opts.shape || [
+      { x: fromNode.x, y: fromNode.y },
+      { x: toNode.x, y: toNode.y }
+    ];
+    const edge = {
+      id: state.nextEdgeId++,
+      from: fromNode.id, to: toNode.id,
+      shape, length: polyLen(shape),
+      bridge: !!opts.bridge,
+      custom: !!opts.custom
+    };
+    state.edges.push(edge);
+    // Reverse for two-way travel.
+    const rev = {
+      id: state.nextEdgeId++,
+      from: toNode.id, to: fromNode.id,
+      shape: shape.slice().reverse(), length: edge.length,
+      bridge: edge.bridge, custom: edge.custom
+    };
+    state.edges.push(rev);
+    return [edge, rev];
+  }
+
+  function rebuildAdjacency() {
+    const a = new Map();
+    for (const e of state.edges) {
+      if (!a.has(e.from)) a.set(e.from, []);
+      a.get(e.from).push(e);
+    }
+    state.adjacency = a;
+  }
+
   function polyLen(pts) {
     let d = 0;
     for (let i = 1; i < pts.length; i++) {
@@ -75,6 +134,7 @@
     }
     return d;
   }
+
   function sampleEdge(edge, d) {
     const pts = edge.shape;
     if (d <= 0) {
@@ -85,14 +145,13 @@
     let acc = 0;
     for (let i = 1; i < pts.length; i++) {
       const a = pts[i - 1], b = pts[i];
-      const L = Math.hypot(b.x - a.x, b.y - a.y) || 1e-4;
+      const L = Math.hypot(b.x - a.x, b.y - a.y) || 1e-6;
       if (acc + L >= d) {
         const t = (d - acc) / L;
         return {
           x: a.x + (b.x - a.x) * t,
           y: a.y + (b.y - a.y) * t,
-          hx: (b.x - a.x) / L,
-          hy: (b.y - a.y) / L
+          hx: (b.x - a.x) / L, hy: (b.y - a.y) / L
         };
       }
       acc += L;
@@ -112,7 +171,6 @@
   }
 
   function segIntersect(a, b, c, d) {
-    // Return [t, u] where hit is a + t*(b-a) = c + u*(d-c), both in (0,1). null if none.
     const d1x = b.x - a.x, d1y = b.y - a.y;
     const d2x = d.x - c.x, d2y = d.y - c.y;
     const denom = d1x * d2y - d1y * d2x;
@@ -123,101 +181,23 @@
     return { t, u, x: a.x + t * d1x, y: a.y + t * d1y };
   }
 
-  // ================================================================
-  // Network loading + rebuilding
-  // ================================================================
-  async function loadData() {
-    const res = await fetch('data/fuengirola.json');
-    const raw = await res.json();
-    const nodes = new Map();
-    for (const id in raw.nodes) {
-      const n = raw.nodes[id];
-      nodes.set(Number(id), {
-        id: Number(id), x: n.x, y: n.y, junction: !!n.junction, degree: n.degree || 0,
-        ctrl: 'none', bridge: false, custom: false
-      });
-    }
-    const edges = raw.edges.map(e => ({ ...e, bridge: false, custom: false }));
-    state.net = {
-      nodes, edges,
-      adjacency: new Map(), incoming: new Map(),
-      sources: [], sinks: [],
-      bbox: raw.bbox, origin: raw.origin
-    };
-    rebuildAdjacency();
-    rebuildBoundaries();
-    rebuildApproaches();
-  }
-
-  function rebuildAdjacency() {
-    const adj = new Map(), inc = new Map();
-    for (const e of state.net.edges) {
-      if (!adj.has(e.from)) adj.set(e.from, []);
-      adj.get(e.from).push(e);
-      if (!inc.has(e.to)) inc.set(e.to, []);
-      inc.get(e.to).push(e);
-    }
-    state.net.adjacency = adj;
-    state.net.incoming = inc;
-  }
-
-  function rebuildBoundaries() {
-    // Boundary = degree-1 nodes of the ORIGINAL baked map. Player-added nodes
-    // don't become sources.
-    state.net.sources = [];
-    state.net.sinks = [];
-    for (const [id, n] of state.net.nodes) {
-      if (n.custom) continue;
-      if ((n.degree || 0) === 1) {
-        const outs = state.net.adjacency.get(id) || [];
-        const ins = state.net.incoming.get(id) || [];
-        for (const e of outs) state.net.sources.push(e);
-        for (const e of ins) state.net.sinks.push(e);
-      }
-    }
-  }
-
-  function rebuildApproaches() {
-    state.approaches.clear();
-    for (const [id, n] of state.net.nodes) {
-      const incoming = state.net.incoming.get(id) || [];
-      if (incoming.length < 2) continue;
-      const list = incoming.map(e => {
-        const pts = e.shape;
-        const a = pts[pts.length - 2], b = pts[pts.length - 1];
-        return { edge: e, bearing: Math.atan2(b.y - a.y, b.x - a.x), rank: e.rank || 0 };
-      });
-      list.sort((a, b) => a.bearing - b.bearing);
-      state.approaches.set(id, list);
-    }
-  }
-
-  function nextNodeId() {
-    let max = 0;
-    for (const id of state.net.nodes.keys()) if (id > max) max = id;
-    return max + 1;
-  }
-  function nextEdgeId() {
-    let max = 0;
-    for (const e of state.net.edges) if (e.id > max) max = e.id;
-    return max + 1;
-  }
-
-  function findNearestNode(wx, wy, maxDist) {
-    let best = null, bestD = maxDist * maxDist;
-    for (const n of state.net.nodes.values()) {
-      const d = (n.x - wx) * (n.x - wx) + (n.y - wy) * (n.y - wy);
+  function findNearestNode(x, y, snapR) {
+    let best = null, bestD = snapR * snapR;
+    for (const n of state.nodes.values()) {
+      const d = (n.x - x) ** 2 + (n.y - y) ** 2;
       if (d < bestD) { bestD = d; best = n; }
     }
     return best;
   }
 
-  function findNearestEdge(wx, wy, maxDist) {
-    let best = null, bestD = maxDist * maxDist;
-    for (const e of state.net.edges) {
+  function findNearestEdge(x, y, snapR) {
+    let best = null, bestD = snapR * snapR;
+    for (const e of state.edges) {
+      // Only check one direction of each pair to avoid double work.
+      if (e.id % 2 === 0) continue;
       const pts = e.shape;
       for (let i = 1; i < pts.length; i++) {
-        const d = distPointSeg2(wx, wy, pts[i - 1], pts[i]);
+        const d = distPointSeg2(x, y, pts[i - 1], pts[i]);
         if (d < bestD) { bestD = d; best = e; }
       }
     }
@@ -225,23 +205,10 @@
   }
 
   // ================================================================
-  // Adding + erasing roads
+  // Road building
   // ================================================================
-  function findOrCreateNodeAt(wx, wy, snap) {
-    const existing = findNearestNode(wx, wy, snap);
-    if (existing) return existing;
-    const id = nextNodeId();
-    const n = {
-      id, x: wx, y: wy, junction: false, degree: 0,
-      ctrl: 'none', bridge: false, custom: true
-    };
-    state.net.nodes.set(id, n);
-    return n;
-  }
-
-  // Split an existing edge at a given point (on the edge), inserting a new node.
   function splitEdgeAtPoint(edge, px, py) {
-    // Find segment i and parameter t where the point lies
+    // Find segment and t
     const pts = edge.shape;
     let bestI = 1, bestT = 0, bestD = Infinity;
     for (let i = 1; i < pts.length; i++) {
@@ -254,414 +221,235 @@
       const d = (qx - px) ** 2 + (qy - py) ** 2;
       if (d < bestD) { bestD = d; bestI = i; bestT = t; }
     }
-
-    // Build split node
-    const newNode = findOrCreateNodeAt(px, py, 3);
-
-    // Shape halves
     const a = pts[bestI - 1], b = pts[bestI];
     const splitPt = { x: a.x + (b.x - a.x) * bestT, y: a.y + (b.y - a.y) * bestT };
 
-    const shapeA = pts.slice(0, bestI).concat([splitPt]);
-    const shapeB = [splitPt].concat(pts.slice(bestI));
+    const newNode = findNearestNode(splitPt.x, splitPt.y, 6) || makeNode(splitPt.x, splitPt.y);
 
-    // Replace `edge` with two edges
-    const originalFrom = edge.from, originalTo = edge.to;
+    const shapeA = pts.slice(0, bestI).concat([{ x: splitPt.x, y: splitPt.y }]);
+    const shapeB = [{ x: splitPt.x, y: splitPt.y }].concat(pts.slice(bestI));
+
+    // Modify `edge` in place -> becomes first half.
+    const oldTo = edge.to;
     edge.to = newNode.id;
     edge.shape = shapeA;
     edge.length = polyLen(shapeA);
 
-    const tail = {
-      ...edge,
-      id: nextEdgeId(),
-      from: newNode.id, to: originalTo,
-      shape: shapeB,
-      length: polyLen(shapeB)
-    };
-    state.net.edges.push(tail);
+    // Second half as new edge (same direction).
+    state.edges.push({
+      id: state.nextEdgeId++,
+      from: newNode.id, to: oldTo,
+      shape: shapeB, length: polyLen(shapeB),
+      bridge: edge.bridge, custom: edge.custom
+    });
 
-    // Also check for any twin (reverse) edge that needs splitting
-    const twin = state.net.edges.find(x =>
-      x !== edge && x !== tail &&
-      x.from === originalTo && x.to === originalFrom &&
-      Math.abs(x.length - (edge.length + tail.length)) < 3
+    // Also split the reverse twin.
+    const twin = state.edges.find(x =>
+      x !== edge && x.from === oldTo &&
+      Math.abs(x.length - (edge.length + polyLen(shapeB))) < 3
     );
     if (twin) {
-      // Split twin too — but mirrored: from originalTo back to originalFrom
-      const tpts = twin.shape;
-      // Find the closest point in twin's shape to splitPt
-      // Since twin shape is the reverse shape, the split point is the same location.
-      const tshapeA = [];
-      for (const p of tpts) {
-        tshapeA.push(p);
-        if (Math.hypot(p.x - splitPt.x, p.y - splitPt.y) < 2) break;
-      }
-      // Use the cleanest approach: twin goes originalTo -> originalFrom,
-      // so the first half (originalTo -> newNode) is the reverse of our shapeB.
-      const thalfA = shapeB.slice().reverse();
-      const thalfB = shapeA.slice().reverse();
       const twinOrigFrom = twin.from;
       twin.to = newNode.id;
-      twin.shape = thalfA;
-      twin.length = polyLen(thalfA);
-      state.net.edges.push({
-        ...twin,
-        id: nextEdgeId(),
+      twin.shape = shapeB.slice().reverse();
+      twin.length = polyLen(twin.shape);
+      state.edges.push({
+        id: state.nextEdgeId++,
         from: newNode.id, to: twinOrigFrom,
-        shape: thalfB,
-        length: polyLen(thalfB)
+        shape: shapeA.slice().reverse(), length: polyLen(shapeA),
+        bridge: twin.bridge, custom: twin.custom
       });
     }
 
-    // Mark as junction
-    newNode.junction = true;
     return newNode;
   }
 
-  function addRoad(startWorld, endWorld, opts = {}) {
+  function addRoad(startPt, endPt, opts = {}) {
     const isBridge = !!opts.isBridge;
-    const SNAP = 14;
+    const SNAP = 28;
 
-    // Find or create start/end nodes
-    let startNode = findOrCreateNodeAt(startWorld.x, startWorld.y, SNAP);
-    let endNode = findOrCreateNodeAt(endWorld.x, endWorld.y, SNAP);
-    if (startNode.id === endNode.id) return { ok: false, reason: 'start==end' };
+    const startNode = findNearestNode(startPt.x, startPt.y, SNAP) || makeNode(startPt.x, startPt.y);
+    const endNode   = findNearestNode(endPt.x,   endPt.y,   SNAP) || makeNode(endPt.x, endPt.y);
+    if (startNode.id === endNode.id) return { ok: false, reason: 'start == end' };
 
     const shape = [
       { x: startNode.x, y: startNode.y },
-      { x: endNode.x, y: endNode.y }
+      { x: endNode.x,   y: endNode.y }
     ];
-    const length = polyLen(shape);
-    if (length < 6) return { ok: false, reason: 'too short' };
+    if (polyLen(shape) < 40) return { ok: false, reason: 'too short' };
 
-    // Intersection handling: for regular roads, any crossing with an existing
-    // non-bridge edge becomes a junction. Bridges skip this — they pass over.
     if (!isBridge) {
+      // Find crossings with existing non-bridge edges and split at each.
       const crossings = [];
-      for (const e of state.net.edges) {
-        if (e.bridge) continue;   // can't form junction on a bridge
+      for (const e of state.edges) {
+        if (e.bridge) continue;
+        if (e.id % 2 === 0) continue; // dedupe against twins
         const pts = e.shape;
         for (let i = 1; i < pts.length; i++) {
           const hit = segIntersect(shape[0], shape[1], pts[i - 1], pts[i]);
           if (hit) crossings.push({ edge: e, hit });
         }
       }
-      // Sort crossings by t (along the new road) ascending
       crossings.sort((a, b) => a.hit.t - b.hit.t);
-      // Split each crossed edge at the hit point, and use the new node as an
-      // intermediate waypoint on our new road.
       const waypoints = [];
       for (const cr of crossings) {
-        const newNode = splitEdgeAtPoint(cr.edge, cr.hit.x, cr.hit.y);
-        waypoints.push(newNode);
+        waypoints.push(splitEdgeAtPoint(cr.edge, cr.hit.x, cr.hit.y));
       }
-      // Build our new road as a chain of edges connecting startNode -> waypoints -> endNode.
       const chain = [startNode, ...waypoints, endNode];
       for (let i = 0; i + 1 < chain.length; i++) {
-        const a = chain[i], b = chain[i + 1];
-        const s = [{ x: a.x, y: a.y }, { x: b.x, y: b.y }];
-        const newEdge = {
-          id: nextEdgeId(), from: a.id, to: b.id,
-          shape: s, length: polyLen(s),
-          lanes: 1, oneway: false,
-          maxspeed: 40, hw: 'unclassified', rank: 1,
-          bridge: false, custom: true
-        };
-        state.net.edges.push(newEdge);
-        // Reverse for two-way travel
-        state.net.edges.push({
-          ...newEdge, id: nextEdgeId(),
-          from: b.id, to: a.id, shape: s.slice().reverse()
-        });
+        makeEdge(chain[i], chain[i + 1], { custom: true });
       }
     } else {
-      // Bridge: single straight edge, no intersection with anything.
-      const newEdge = {
-        id: nextEdgeId(), from: startNode.id, to: endNode.id,
-        shape, length,
-        lanes: 1, oneway: false,
-        maxspeed: 50, hw: 'unclassified', rank: 2,
-        bridge: true, custom: true
-      };
-      state.net.edges.push(newEdge);
-      state.net.edges.push({
-        ...newEdge, id: nextEdgeId(),
-        from: endNode.id, to: startNode.id, shape: shape.slice().reverse()
-      });
+      // Bridge: single straight edge, ignores crossings.
+      makeEdge(startNode, endNode, { custom: true, bridge: true, shape });
     }
 
-    recomputeDegrees();
     rebuildAdjacency();
-    rebuildApproaches();
+    // Recompute routes for undelivered cars so they can take the new path if shorter.
+    refreshRoutes();
     return { ok: true };
   }
 
-  function eraseEdge(edge) {
-    // Remove edge + its twin. Drop any cars whose path uses them.
-    const twin = state.net.edges.find(x =>
+  function eraseEdgeById(edge) {
+    const twin = state.edges.find(x =>
       x !== edge && x.from === edge.to && x.to === edge.from &&
       Math.abs(x.length - edge.length) < 1
     );
-    const gone = new Set([edge.id]); if (twin) gone.add(twin.id);
-    state.net.edges = state.net.edges.filter(e => !gone.has(e.id));
+    const gone = new Set([edge.id]);
+    if (twin) gone.add(twin.id);
+    state.edges = state.edges.filter(e => !gone.has(e.id));
     state.cars = state.cars.filter(c => !c.path.some(e => gone.has(e.id)));
-    recomputeDegrees();
     rebuildAdjacency();
-    rebuildApproaches();
-  }
-
-  function recomputeDegrees() {
-    const neigh = new Map();
-    for (const e of state.net.edges) {
-      if (!neigh.has(e.from)) neigh.set(e.from, new Set());
-      if (!neigh.has(e.to)) neigh.set(e.to, new Set());
-      neigh.get(e.from).add(e.to);
-      neigh.get(e.to).add(e.from);
-    }
-    for (const [id, n] of state.net.nodes) {
-      const deg = (neigh.get(id) || new Set()).size;
-      n.degree = deg;
-      n.junction = deg >= 3;
-    }
-    // Prune unreachable nodes (degree 0) added previously but never connected
-    for (const [id, n] of [...state.net.nodes]) {
-      if (n.degree === 0 && n.custom) state.net.nodes.delete(id);
-    }
-  }
-
-  function makeRoundabout(nodeId, radiusM = 12) {
-    const node = state.net.nodes.get(nodeId);
-    if (!node) return { ok: false, reason: 'no node' };
-    const touching = state.net.edges.filter(e => e.from === nodeId || e.to === nodeId);
-    if (touching.length < 3) return { ok: false, reason: 'need 3+ roads' };
-
-    function dirFrom(e) {
-      let dx, dy;
-      if (e.from === nodeId) {
-        const p0 = e.shape[0], p1 = e.shape[1];
-        dx = p1.x - p0.x; dy = p1.y - p0.y;
-      } else {
-        const n = e.shape.length;
-        const pn = e.shape[n - 1], pn1 = e.shape[n - 2];
-        dx = pn1.x - pn.x; dy = pn1.y - pn.y;
-      }
-      const L = Math.hypot(dx, dy) || 1;
-      return { dx: dx / L, dy: dy / L };
-    }
-    // Group edges by bearing bucket.
-    const groups = [];
-    for (const e of touching) {
-      const d = dirFrom(e);
-      const bearing = Math.atan2(d.dy, d.dx);
-      let g = groups.find(g => Math.abs(angleDiff(g.bearing, bearing)) < 0.35);
-      if (!g) { g = { bearing, dx: d.dx, dy: d.dy, edges: [] }; groups.push(g); }
-      g.edges.push(e);
-    }
-    if (groups.length < 3) return { ok: false, reason: 'approaches too close' };
-
-    // Ring nodes
-    const ringNodes = groups.map(g => {
-      const rx = node.x + radiusM * g.dx;
-      const ry = node.y + radiusM * g.dy;
-      const rn = {
-        id: nextNodeId(), x: rx, y: ry,
-        junction: true, degree: 3,
-        ctrl: 'none', bridge: false, custom: true
-      };
-      state.net.nodes.set(rn.id, rn);
-      return { node: rn, bearing: g.bearing, edges: g.edges };
-    });
-
-    // Rewire touching edges.
-    for (const rn of ringNodes) {
-      for (const e of rn.edges) {
-        if (e.from === nodeId) {
-          e.from = rn.node.id;
-          e.shape[0] = { x: rn.node.x, y: rn.node.y };
-        } else {
-          e.to = rn.node.id;
-          e.shape[e.shape.length - 1] = { x: rn.node.x, y: rn.node.y };
-        }
-        e.length = polyLen(e.shape);
-      }
-    }
-
-    // Counterclockwise when viewed from above (y-flipped). With our y-down
-    // projection, that means sort by bearing DESCENDING.
-    ringNodes.sort((a, b) => b.bearing - a.bearing);
-
-    for (let i = 0; i < ringNodes.length; i++) {
-      const a = ringNodes[i].node;
-      const b = ringNodes[(i + 1) % ringNodes.length].node;
-      let angA = Math.atan2(a.y - node.y, a.x - node.x);
-      let angB = Math.atan2(b.y - node.y, b.x - node.x);
-      let delta = angB - angA;
-      if (delta <= -Math.PI) delta += 2 * Math.PI;
-      else if (delta > Math.PI) delta -= 2 * Math.PI;
-      if (delta < 0) delta += 2 * Math.PI;
-      const steps = 5;
-      const shape = [];
-      for (let s = 0; s <= steps; s++) {
-        const t = s / steps;
-        const ang = angA + delta * t;
-        shape.push({ x: node.x + radiusM * Math.cos(ang), y: node.y + radiusM * Math.sin(ang) });
-      }
-      state.net.edges.push({
-        id: nextEdgeId(), from: a.id, to: b.id,
-        shape, length: polyLen(shape),
-        lanes: 1, oneway: true,
-        maxspeed: 25, hw: 'tertiary', rank: 2,
-        bridge: false, custom: true
-      });
-    }
-
-    // Remove the original node. Any existing cars with the old node's edges
-    // keep working because we mutated the same edge objects in place — their
-    // shape endpoints are now the ring nodes.
-    state.net.nodes.delete(nodeId);
-    // Drop any cars whose path straddled the removed junction (their routes
-    // may be invalid across the modified edges).
-    const memberIds = new Set(touching.map(e => e.id));
-    state.cars = state.cars.filter(c => !c.path.some(e => memberIds.has(e.id)));
-
-    recomputeDegrees();
-    rebuildAdjacency();
-    rebuildApproaches();
-    return { ok: true };
-  }
-
-  function angleDiff(a, b) {
-    let d = b - a;
-    while (d > Math.PI) d -= 2 * Math.PI;
-    while (d <= -Math.PI) d += 2 * Math.PI;
-    return d;
-  }
-
-  function setSignal(nodeId, on) {
-    const n = state.net.nodes.get(nodeId);
-    if (!n) return;
-    if (on && (n.degree || 0) < 3) return;
-    n.ctrl = on ? 'signal' : 'none';
-    if (!on) state.signalState.delete(nodeId);
-    else ensureSignalState(nodeId);
-  }
-
-  function ensureSignalState(nodeId) {
-    if (state.signalState.has(nodeId)) return state.signalState.get(nodeId);
-    const approaches = state.approaches.get(nodeId) || [];
-    if (approaches.length === 0) return null;
-    const groups = [[], []];
-    for (const ap of approaches) {
-      const b = ((ap.bearing + Math.PI * 2) % Math.PI);
-      const idx = (b < Math.PI / 4 || b >= 3 * Math.PI / 4) ? 0 : 1;
-      groups[idx].push(ap.edge.id);
-    }
-    if (groups[0].length === 0) { groups[0] = groups[1]; groups[1] = []; }
-    const s = { phase: 0, tPhase: 0, yellow: false, groups };
-    state.signalState.set(nodeId, s);
-    return s;
+    refreshRoutes();
   }
 
   // ================================================================
   // Routing
   // ================================================================
-  function route(startEdge, goalEdge) {
-    if (!startEdge || !goalEdge) return null;
-    if (startEdge.id === goalEdge.id) return [startEdge];
-    const target = goalEdge.from;
+  function routeFromNode(startNodeId, targetNodeId) {
+    if (startNodeId === targetNodeId) return [];
     const dist = new Map();
-    const prev = new Map();
+    const prevEdge = new Map();
     const visited = new Set();
-    const q = [[0, startEdge.to]];
-    dist.set(startEdge.to, 0);
-    prev.set(startEdge.to, startEdge);
+    const q = [[0, startNodeId]];
+    dist.set(startNodeId, 0);
     while (q.length) {
       q.sort((a, b) => a[0] - b[0]);
       const [d, u] = q.shift();
       if (visited.has(u)) continue;
       visited.add(u);
-      if (u === target) break;
-      const outs = state.net.adjacency.get(u) || [];
+      if (u === targetNodeId) break;
+      const outs = state.adjacency.get(u) || [];
       for (const e of outs) {
-        if (e.id === startEdge.id) continue;
-        const w = e.length / Math.max(5, e.maxspeed * 1000 / 3600);
+        const w = e.length;
         const nd = d + w;
         if (nd < (dist.get(e.to) ?? Infinity)) {
-          dist.set(e.to, nd); prev.set(e.to, e);
+          dist.set(e.to, nd); prevEdge.set(e.to, e);
           q.push([nd, e.to]);
         }
       }
     }
-    if (!prev.has(target)) return null;
+    if (!prevEdge.has(targetNodeId)) return null;
     const chain = [];
-    let cur = target;
-    while (cur !== startEdge.to && prev.has(cur)) {
-      const e = prev.get(cur);
+    let cur = targetNodeId;
+    while (cur !== startNodeId && prevEdge.has(cur)) {
+      const e = prevEdge.get(cur);
       chain.push(e);
       cur = e.from;
     }
     chain.reverse();
-    return [startEdge, ...chain, goalEdge];
+    return chain;
+  }
+
+  function refreshRoutes() {
+    // Recompute paths for cars that haven't started moving (still in queue)
+    // or are on a stale edge. For simplicity, recompute for all cars — if the
+    // current edge is no longer connected to their sink, drop them (they're
+    // on a dead-end the player erased).
+    const removed = [];
+    for (const car of state.cars) {
+      const toBuilding = state.buildings.find(b => b.id === car.sinkId);
+      if (!toBuilding) { removed.push(car); continue; }
+      // If car is still at the gate (pos==0 on first edge and in queue? no —
+      // in-queue cars aren't in state.cars). So just re-route from the current
+      // node (edge.to of current edge) to the sink node.
+      const curEdge = car.path[car.pathIdx];
+      if (!curEdge) continue;
+      // Route from the node we're heading toward to the sink's node.
+      const newPath = routeFromNode(curEdge.to, toBuilding.nodeId);
+      if (!newPath) { removed.push(car); continue; }
+      // Keep the current edge as we're on it; replace the remaining path.
+      car.path = [curEdge, ...newPath];
+      car.pathIdx = 0;
+    }
+    for (const c of removed) {
+      const i = state.cars.indexOf(c);
+      if (i >= 0) state.cars.splice(i, 1);
+    }
   }
 
   // ================================================================
-  // Simulation step
+  // Spawning
   // ================================================================
-  function spawnCar() {
-    const { sources, sinks } = state.net;
-    if (!sources.length || !sinks.length) return null;
-    const source = sources[Math.floor(Math.random() * sources.length)];
-    for (const c of state.cars) {
-      if (c.path[c.pathIdx] === source && c.pos < CAR_LEN + MIN_GAP + 1) return null;
+  function currentSpawnInterval() {
+    const t = Math.min(1, state.time / DEMAND_RAMP_SECS);
+    return SPAWN_INTERVAL_START + (SPAWN_INTERVAL_END - SPAWN_INTERVAL_START) * t;
+  }
+
+  function tryDispatchFromQueue(building) {
+    if (building.kind !== 'house' || building.queue.length === 0) return;
+    // Pick a random matching-colour shop.
+    const shops = state.buildings.filter(b => b.kind === 'shop' && b.color === building.color);
+    if (!shops.length) return;
+    // Try each in order of distance for a reliable fast default.
+    shops.sort((a, b) => (a.x - building.x) ** 2 + (a.y - building.y) ** 2 - ((b.x - building.x) ** 2 + (b.y - building.y) ** 2));
+    for (const shop of shops) {
+      const path = routeFromNode(building.nodeId, shop.nodeId);
+      if (!path || path.length === 0) continue;
+
+      // Check first edge has room for a new car.
+      const firstEdge = path[0];
+      const alreadyOnEdge = state.cars.filter(c => c.path[c.pathIdx] === firstEdge);
+      let blocked = false;
+      for (const c of alreadyOnEdge) {
+        if (c.pos < CAR_RADIUS * 2 + CAR_GAP + 6) { blocked = true; break; }
+      }
+      if (blocked) return; // try next tick
+
+      const car = {
+        id: state.nextCarId++,
+        path, pathIdx: 0, pos: 0,
+        speed: 0, maxSpeed: CAR_SPEED,
+        color: PALETTE[building.color].car,
+        sinkId: shop.id,
+        houseId: building.id,
+        spawnedAt: state.time,
+        stuckTime: 0
+      };
+      state.cars.push(car);
+      building.queue.pop();
+      return;
     }
-    let path = null;
-    for (let k = 0; k < 8; k++) {
-      const sink = sinks[Math.floor(Math.random() * sinks.length)];
-      if (sink.from === source.to) continue;
-      path = route(source, sink);
-      if (path) break;
-    }
-    if (!path) return null;
-    const baseTime = path.reduce((s, e) => s + e.length / Math.max(5, e.maxspeed * 1000 / 3600), 0);
-    const car = {
-      id: state.nextCarId++,
-      path, pathIdx: 0, pos: 0,
-      speed: Math.min(source.maxspeed * 1000 / 3600 * 0.55, 7),
-      maxSpeed: Math.min(source.maxspeed * 1000 / 3600, 18),
-      length: CAR_LEN,
-      color: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)],
-      spawnedAt: state.time,
-      baseTime,
-      stuckTime: 0
-    };
-    state.cars.push(car);
-    return car;
   }
 
   function stepSim(dt) {
     if (state.paused || state.over) return;
     state.time += dt;
 
-    // Demand ramps over time.
-    state.demand = Math.min(DEMAND_MAX, DEMAND_START + state.time * DEMAND_RAMP_PER_SEC);
-
-    // Spawn
-    state.spawnAccum += state.demand * dt;
-    while (state.spawnAccum >= 1) { state.spawnAccum -= 1; spawnCar(); }
-
-    // Signals
-    for (const [nid, s] of state.signalState) {
-      s.tPhase += dt;
-      if (!s.yellow && s.tPhase >= SIGNAL_GREEN) { s.yellow = true; s.tPhase = 0; }
-      else if (s.yellow && s.tPhase >= SIGNAL_YELLOW) {
-        s.yellow = false; s.tPhase = 0;
-        s.phase = (s.phase + 1) % s.groups.length;
-        let g = 0;
-        while (s.groups[s.phase].length === 0 && g++ < 4) s.phase = (s.phase + 1) % s.groups.length;
+    // Per-house spawning. Each house has its own timer.
+    const interval = currentSpawnInterval();
+    for (const b of state.buildings) {
+      if (b.kind !== 'house') continue;
+      b.timer = (b.timer || 0) + dt;
+      while (b.timer >= interval) {
+        b.timer -= interval;
+        b.queue.push({ waitingSince: state.time });
       }
+      // Try to dispatch queued cars this tick.
+      tryDispatchFromQueue(b);
     }
 
-    // Cars per edge, sorted by pos
+    // Move cars.
     const byEdge = new Map();
     for (const c of state.cars) {
       const e = c.path[c.pathIdx];
@@ -670,58 +458,51 @@
     }
     for (const arr of byEdge.values()) arr.sort((a, b) => a.pos - b.pos);
 
-    // Move
     const toRemove = [];
     for (const car of state.cars) {
       const e = car.path[car.pathIdx];
       const list = byEdge.get(e.id) || [];
       const myIdx = list.indexOf(car);
       const leader = myIdx >= 0 ? list[myIdx + 1] : null;
-      let gap = Infinity, dv = 0;
+
+      let targetSpeed = car.maxSpeed;
       if (leader) {
-        gap = leader.pos - car.pos - leader.length;
-        dv = car.speed - leader.speed;
+        const gap = leader.pos - car.pos - CAR_RADIUS * 2;
+        if (gap < CAR_STOP_GAP) targetSpeed = Math.max(0, leader.speed * 0.8);
+        else if (gap < CAR_FOLLOW_TRIGGER) {
+          // Smoothly match leader's speed when close.
+          const k = (gap - CAR_STOP_GAP) / (CAR_FOLLOW_TRIGGER - CAR_STOP_GAP);
+          targetSpeed = leader.speed + (car.maxSpeed - leader.speed) * k;
+        }
       } else {
+        // Look ahead to the next edge for a leader near its start.
         const remaining = e.length - car.pos;
-        if (remaining < 30 && car.path[car.pathIdx + 1]) {
+        if (remaining < 60 && car.path[car.pathIdx + 1]) {
           const nextE = car.path[car.pathIdx + 1];
           const nlist = byEdge.get(nextE.id) || [];
-          if (nlist.length && nlist[0].pos < 20) {
-            gap = remaining + nlist[0].pos - nlist[0].length;
-            dv = car.speed - nlist[0].speed;
+          if (nlist.length && nlist[0].pos < 30) {
+            const gap = remaining + nlist[0].pos - CAR_RADIUS * 2;
+            if (gap < CAR_STOP_GAP) targetSpeed = Math.max(0, nlist[0].speed * 0.8);
+            else if (gap < CAR_FOLLOW_TRIGGER) {
+              const k = (gap - CAR_STOP_GAP) / (CAR_FOLLOW_TRIGGER - CAR_STOP_GAP);
+              targetSpeed = nlist[0].speed + (car.maxSpeed - nlist[0].speed) * k;
+            }
           }
         }
       }
 
-      // Junction obstacle
-      const remaining = e.length - car.pos;
-      if (remaining < 35 && car.path[car.pathIdx + 1]) {
-        const node = state.net.nodes.get(e.to);
-        if (node && junctionBlocks(node, e, car, remaining)) {
-          const jgap = Math.max(0, remaining - 2.5);
-          if (jgap < gap) { gap = jgap; dv = car.speed; }
-        }
-      }
+      // Smooth towards targetSpeed.
+      const accel = targetSpeed > car.speed ? 160 : 260;  // brake harder than accelerate
+      const d = targetSpeed - car.speed;
+      const maxStep = accel * dt;
+      car.speed += Math.sign(d) * Math.min(Math.abs(d), maxStep);
+      if (car.speed < 0) car.speed = 0;
 
-      // IDM
-      const v = car.speed;
-      const v0 = Math.min(car.maxSpeed, e.maxspeed * 1000 / 3600);
-      const laneFactor = 1 / Math.sqrt(Math.max(1, e.lanes || 1));
-      const effMinGap = MIN_GAP * Math.max(0.5, laneFactor);
-      const effHeadway = TIME_HEADWAY * Math.max(0.6, laneFactor);
-      let accel;
-      if (gap === Infinity) {
-        accel = ACCEL_MAX * (1 - Math.pow(v / Math.max(0.5, v0), IDM_DELTA));
-      } else {
-        const sStar = effMinGap + Math.max(0, v * effHeadway + (v * dv) / (2 * Math.sqrt(ACCEL_MAX * BRAKE_COMF)));
-        const s = Math.max(0.15, gap);
-        accel = ACCEL_MAX * (1 - Math.pow(v / Math.max(0.5, v0), IDM_DELTA) - Math.pow(sStar / s, 2));
-        if (accel < -BRAKE_HARD) accel = -BRAKE_HARD;
-      }
-      car.speed = Math.max(0, car.speed + accel * dt);
       car.pos += car.speed * dt;
-      if (car.speed < 0.25) car.stuckTime += dt; else car.stuckTime = 0;
 
+      if (car.speed < 2) car.stuckTime += dt; else car.stuckTime = 0;
+
+      // Advance across edges.
       let curE = e;
       while (car.pos >= curE.length && car.pathIdx < car.path.length - 1) {
         car.pos -= curE.length;
@@ -729,60 +510,22 @@
         curE = car.path[car.pathIdx];
       }
       if (car.pathIdx >= car.path.length - 1 && car.pos >= car.path[car.path.length - 1].length) {
-        state.completed++;
-        state.throughputLog.push(state.time);
+        state.delivered++;
         toRemove.push(car);
       }
       if (car.stuckTime > 180) toRemove.push(car);
     }
     if (toRemove.length) state.cars = state.cars.filter(c => !toRemove.includes(c));
 
-    // Jam meter: queued slow cars past threshold = bad
-    const stuck = state.cars.filter(c => c.speed < 1.5).length;
-    if (stuck > JAM_QUEUE_THRESHOLD) {
-      const severity = (stuck - JAM_QUEUE_THRESHOLD) / JAM_QUEUE_THRESHOLD;
-      state.jamMeter = Math.min(JAM_FAIL_AT, state.jamMeter + JAM_FILL_RATE * dt * (1 + severity));
-    } else {
-      state.jamMeter = Math.max(0, state.jamMeter - JAM_DRAIN_RATE * dt);
+    // Jam meter: fills when any house queue is too long.
+    let jamPressure = 0;
+    for (const b of state.buildings) {
+      if (b.kind !== 'house') continue;
+      if (b.queue.length >= QUEUE_FAIL_SIZE) jamPressure += (b.queue.length - QUEUE_FAIL_SIZE + 1);
     }
-    if (state.jamMeter >= JAM_FAIL_AT) endGame();
-
-    // Trim throughput log
-    const cutoff = state.time - 60;
-    while (state.throughputLog.length && state.throughputLog[0] < cutoff) state.throughputLog.shift();
-  }
-
-  function junctionBlocks(node, edge, car, remaining) {
-    if ((node.degree || 0) < 3 && node.ctrl === 'none') return false;
-    if (node.ctrl === 'signal') {
-      const s = state.signalState.get(node.id);
-      if (!s) return false;
-      if (s.yellow) return true;
-      const g = s.groups[s.phase];
-      if (!g.includes(edge.id)) return true;
-      return false;
-    }
-    // Default priority-by-rank
-    const approaches = state.approaches.get(node.id);
-    if (!approaches || approaches.length <= 1) return false;
-    const maxRank = Math.max(...approaches.map(a => a.rank));
-    if ((edge.rank || 0) >= maxRank) return false;
-    return approachHasConflict(node, edge, 3.2);
-  }
-
-  function approachHasConflict(node, myEdge, minGap) {
-    const incoming = state.net.incoming.get(node.id) || [];
-    for (const e of incoming) {
-      if (e.id === myEdge.id) continue;
-      for (const c of state.cars) {
-        if (c.path[c.pathIdx] !== e) continue;
-        const rem = e.length - c.pos;
-        if (rem < 0) continue;
-        const v = Math.max(1.5, c.speed);
-        if (rem / v < minGap) return true;
-      }
-    }
-    return false;
+    if (jamPressure > 0) state.jamMeter = Math.min(JAM_FAIL, state.jamMeter + JAM_FILL_RATE * dt * Math.max(1, jamPressure / 3));
+    else state.jamMeter = Math.max(0, state.jamMeter - JAM_DRAIN_RATE * dt);
+    if (state.jamMeter >= JAM_FAIL) endGame();
   }
 
   // ================================================================
@@ -796,19 +539,16 @@
     canvas.height = r.height * state.view.dpr;
     state.view.w = r.width;
     state.view.h = r.height;
+    fitCamera();
   }
 
-  function fitToNetwork(pad = 40) {
-    // Fit to the interesting part of the network rather than the entire bbox.
-    // The A-7 stretches ~1.5 km N-S which is too elongated for a phone view.
-    // Focus on a ±280 m window around origin (the interchange itself).
-    const CORE = 280;
-    const w = CORE * 2, h = CORE * 2.2;
-    const sx = (state.view.w - pad * 2) / w;
-    const sy = (state.view.h - pad * 2) / h;
+  function fitCamera() {
+    const pad = 40;
+    const sx = (state.view.w - pad * 2) / LOGICAL_W;
+    const sy = (state.view.h - pad * 2) / LOGICAL_H;
     state.view.scale = Math.min(sx, sy);
-    state.view.originX = 40;       // a hair east to center on the interchange
-    state.view.originY = 120;      // a hair south: pulls the A-7 entrance exit junctions on screen
+    state.view.originX = LOGICAL_W / 2;
+    state.view.originY = LOGICAL_H / 2;
   }
 
   function w2s(x, y) {
@@ -824,126 +564,45 @@
     };
   }
 
-  // Background texture — cheap procedural parcels for visual interest.
-  let bgCache = null;
-  function ensureBgCache() {
-    if (bgCache) return bgCache;
-    // Seed-generate block patches between roads. For MVP: flat bg.
-    bgCache = { ready: true };
-    return bgCache;
-  }
-
   function render() {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#f4ead5';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-
     ctx.scale(state.view.dpr, state.view.dpr);
 
-    drawBackgroundDecor();
     drawRoads();
-    drawJunctions();
+    drawBuildings();
     drawCars();
     drawDragPreview();
 
     ctx.restore();
   }
 
-  function drawBackgroundDecor() {
-    // Soft random blobs for "buildings" / "greenery" between roads.
-    // Use a seeded pseudo-random so it's consistent across frames.
-    if (!state._bgBlobs) {
-      const blobs = [];
-      const { minX, minY, maxX, maxY } = state.net.bbox;
-      let seed = 1337;
-      const rand = () => {
-        seed = (seed * 9301 + 49297) % 233280;
-        return seed / 233280;
-      };
-      const palette = ['#efe1c2', '#e8d5a8', '#d9c794', '#cfe0c0', '#dceac7'];
-      const bhf = ['#e5d6b0', '#eadcab', '#d9c794'];
-      for (let i = 0; i < 120; i++) {
-        const x = minX + rand() * (maxX - minX);
-        const y = minY + rand() * (maxY - minY);
-        // Skip if close to a road.
-        const e = findNearestEdge(x, y, 16);
-        if (e) continue;
-        const r = 8 + rand() * 22;
-        const col = palette[Math.floor(rand() * palette.length)];
-        blobs.push({ x, y, r, col, rot: rand() * Math.PI });
-      }
-      // A pool near the AquaMijas coordinate (bottom-right of bbox)
-      blobs.push({
-        x: state.net.bbox.maxX - 70,
-        y: state.net.bbox.maxY - 260,
-        r: 55,
-        col: '#b7d7e0',
-        rot: 0, pool: true
-      });
-      state._bgBlobs = blobs;
-    }
-    for (const b of state._bgBlobs) {
-      const s = w2s(b.x, b.y);
-      const rr = b.r * state.view.scale;
-      ctx.save();
-      ctx.translate(s.sx, s.sy);
-      ctx.rotate(b.rot);
-      ctx.fillStyle = b.col;
-      if (b.pool) {
-        ctx.beginPath();
-        ctx.ellipse(0, 0, rr, rr * 0.7, 0, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.fillRect(-rr * 0.8, -rr * 0.55, rr * 1.6, rr * 1.1);
-      }
-      ctx.restore();
-    }
-  }
-
   function drawRoads() {
-    // Two passes for clean casing: dark outline first, road fill second.
-    for (const e of state.net.edges) {
-      const w = laneWidth(e) * state.view.scale + 4;
-      drawPolyline(e.shape, w, e.bridge ? 'rgba(42,47,60,0.25)' : '#1b1f2b');
+    // Dedupe to one render per pair.
+    for (const e of state.edges) {
+      if (e.id % 2 === 0) continue;
+      const w = (e.bridge ? 20 : 22) * state.view.scale;
+      drawPolyline(e.shape, w + 4 * state.view.scale, e.bridge ? 'rgba(30,35,50,0.25)' : '#1b1f2b');
     }
-    for (const e of state.net.edges) {
-      const w = laneWidth(e) * state.view.scale;
-      const col = e.bridge ? '#4a5164' : roadFillColor(e);
-      drawPolyline(e.shape, w, col);
-      // Bridge: show parallel dashed deck edges for depth cue
-      if (e.bridge) {
-        drawBridgeDeck(e, w);
-      }
+    for (const e of state.edges) {
+      if (e.id % 2 === 0) continue;
+      const w = (e.bridge ? 20 : 22) * state.view.scale;
+      drawPolyline(e.shape, w, e.bridge ? '#4a5164' : '#2d3242');
     }
-    // Center dashes on 2-lane or bigger roads.
+    // Dashed centre stripe
     ctx.save();
-    ctx.setLineDash([8, 10]);
-    ctx.lineWidth = Math.max(1, 0.5 * state.view.scale);
-    ctx.strokeStyle = 'rgba(255, 239, 210, 0.6)';
-    for (const e of state.net.edges) {
-      if (e.lanes < 2 || e.bridge) continue;
+    ctx.setLineDash([10 * state.view.scale, 12 * state.view.scale]);
+    ctx.lineCap = 'butt';
+    ctx.strokeStyle = 'rgba(255, 239, 210, 0.7)';
+    ctx.lineWidth = Math.max(1, 1.2 * state.view.scale);
+    for (const e of state.edges) {
+      if (e.id % 2 === 0) continue;
       drawPolyline(e.shape, 0, null, true);
     }
     ctx.setLineDash([]);
     ctx.restore();
-  }
-
-  function laneWidth(e) {
-    return Math.max(5, (e.lanes || 1) * LANE_WIDTH_M * 1.1);
-  }
-
-  function roadFillColor(e) {
-    if (e.custom) return '#3c4256';
-    const byHw = {
-      motorway: '#353a4d',
-      trunk: '#3a3f52',
-      primary: '#404657',
-      secondary: '#484d5e',
-      tertiary: '#5a6070',
-      unclassified: '#6b7180'
-    };
-    return byHw[e.hw] || '#5a6070';
   }
 
   function drawPolyline(pts, w, color, strokeOnly) {
@@ -964,142 +623,126 @@
     ctx.stroke();
   }
 
-  function drawBridgeDeck(e, w) {
-    // Small lip on either side to hint elevation
-    const pts = e.shape;
-    ctx.save();
-    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
-    ctx.lineWidth = 1.5;
-    for (let i = 1; i < pts.length; i++) {
-      const a = pts[i - 1], b = pts[i];
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const L = Math.hypot(dx, dy) || 1;
-      const nx = -dy / L * (w / (2 * state.view.scale) + 0.5);
-      const ny = dx / L * (w / (2 * state.view.scale) + 0.5);
-      const pA = w2s(a.x + nx, a.y + ny), pB = w2s(b.x + nx, b.y + ny);
-      const pC = w2s(a.x - nx, a.y - ny), pD = w2s(b.x - nx, b.y - ny);
+  function drawBuildings() {
+    for (const b of state.buildings) {
+      const p = w2s(b.x, b.y);
+      const col = PALETTE[b.color];
+      const r = 26 * state.view.scale;
+      // Shadow
+      ctx.fillStyle = 'rgba(30, 35, 50, 0.16)';
       ctx.beginPath();
-      ctx.moveTo(pA.sx, pA.sy); ctx.lineTo(pB.sx, pB.sy);
-      ctx.moveTo(pC.sx, pC.sy); ctx.lineTo(pD.sx, pD.sy);
-      ctx.stroke();
+      ctx.ellipse(p.sx, p.sy + 4 * state.view.scale, r * 0.95, r * 0.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Body
+      if (b.kind === 'house') {
+        drawHouse(p.sx, p.sy, r, col.house);
+      } else {
+        drawShop(p.sx, p.sy, r, col.shop);
+      }
+      // Queue of waiting cars under a house
+      if (b.kind === 'house' && b.queue && b.queue.length > 0) {
+        for (let i = 0; i < b.queue.length; i++) {
+          const qx = p.sx - r - (10 * state.view.scale) - i * (13 * state.view.scale);
+          const qy = p.sy;
+          ctx.fillStyle = col.car;
+          ctx.beginPath();
+          ctx.arc(qx, qy, 5.5 * state.view.scale, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
-    ctx.restore();
   }
 
-  function drawJunctions() {
-    for (const n of state.net.nodes.values()) {
-      if (n.degree <= 2 && n.ctrl === 'none') continue;
-      const p = w2s(n.x, n.y);
-      const r = Math.max(3.5, state.view.scale * 1.6);
-      let fill = null;
-      if (n.ctrl === 'signal') {
-        const s = state.signalState.get(n.id);
-        fill = !s ? '#6b7180' : (s.yellow ? '#e8a13a' : '#4fa16a');
-      } else if (n.junction) {
-        fill = 'rgba(255, 250, 238, 0.85)';
-      }
-      if (fill) {
-        ctx.fillStyle = fill;
-        ctx.beginPath();
-        ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(20, 25, 40, 0.45)';
-        ctx.lineWidth = 1.3;
-        ctx.stroke();
-      }
-    }
+  function drawHouse(cx, cy, r, color) {
+    ctx.fillStyle = color;
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    // Pentagon (house with roof) pointing up
+    ctx.moveTo(cx, cy - r);
+    ctx.lineTo(cx + r * 0.85, cy - r * 0.2);
+    ctx.lineTo(cx + r * 0.75, cy + r * 0.75);
+    ctx.lineTo(cx - r * 0.75, cy + r * 0.75);
+    ctx.lineTo(cx - r * 0.85, cy - r * 0.2);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+  }
 
-    // Hover highlight
-    if (state.hover && state.hover.node) {
-      const p = w2s(state.hover.node.x, state.hover.node.y);
-      ctx.strokeStyle = 'rgba(219, 109, 81, 0.85)';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(p.sx, p.sy, Math.max(7, state.view.scale * 3), 0, Math.PI * 2);
-      ctx.stroke();
-    }
+  function drawShop(cx, cy, r, color) {
+    ctx.fillStyle = color;
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.9, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
+    // Cross mark like a shop / destination
+    ctx.strokeStyle = 'rgba(255, 250, 238, 0.85)';
+    ctx.lineWidth = Math.max(2, 2.5 * state.view.scale);
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.42, cy); ctx.lineTo(cx + r * 0.42, cy);
+    ctx.moveTo(cx, cy - r * 0.42); ctx.lineTo(cx, cy + r * 0.42);
+    ctx.stroke();
   }
 
   function drawCars() {
-    // On small screens, force cars to a visible minimum. Without this, at a
-    // fit-to-network zoom on a phone, a 4.5 m car is about 2 px long.
-    const MIN_CAR_LEN = Math.max(10, Math.min(16, state.view.w / 40));
-    const MIN_CAR_WID = MIN_CAR_LEN * 0.5;
+    const MIN_R = Math.max(6, 10 * state.view.scale);
     for (const car of state.cars) {
       const e = car.path[car.pathIdx];
       const p = sampleEdge(e, car.pos);
       const s = w2s(p.x, p.y);
-      const ang = Math.atan2(p.hy, p.hx);
-      const len = Math.max(MIN_CAR_LEN, car.length * state.view.scale * 1.3);
-      const wid = Math.max(MIN_CAR_WID, 2.3 * state.view.scale);
-      ctx.save();
-      ctx.translate(s.sx, s.sy);
-      ctx.rotate(ang);
       // Shadow
-      ctx.fillStyle = 'rgba(20, 25, 40, 0.18)';
+      ctx.fillStyle = 'rgba(30, 35, 50, 0.18)';
       ctx.beginPath();
-      roundedRect(-len * 0.5 + 0.8, -wid * 0.5 + 1.3, len, wid, Math.min(wid * 0.45, 3));
+      ctx.arc(s.sx + 1.2, s.sy + 2, MIN_R * 1.02, 0, Math.PI * 2);
       ctx.fill();
       // Body
       ctx.fillStyle = car.color;
       ctx.beginPath();
-      roundedRect(-len * 0.5, -wid * 0.5, len, wid, Math.min(wid * 0.45, 3));
+      ctx.arc(s.sx, s.sy, MIN_R, 0, Math.PI * 2);
       ctx.fill();
-      // Windscreen
-      ctx.fillStyle = 'rgba(20, 25, 40, 0.45)';
-      ctx.fillRect(len * 0.03, -wid * 0.36, len * 0.22, wid * 0.72);
-      ctx.restore();
+      // Inner ring for identifiability
+      ctx.strokeStyle = 'rgba(255, 250, 238, 0.6)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(s.sx, s.sy, MIN_R * 0.55, 0, Math.PI * 2);
+      ctx.stroke();
     }
   }
 
   function drawDragPreview() {
     if (!state.dragging) return;
-    const a = state.dragging.snapStartNode
-      ? { x: state.dragging.snapStartNode.x, y: state.dragging.snapStartNode.y }
+    const a = state.dragging.snapStart
+      ? { x: state.dragging.snapStart.x, y: state.dragging.snapStart.y }
       : state.dragging.startWorld;
-    const b = state.dragging.snapEndNode
-      ? { x: state.dragging.snapEndNode.x, y: state.dragging.snapEndNode.y }
+    const b = state.dragging.snapEnd
+      ? { x: state.dragging.snapEnd.x, y: state.dragging.snapEnd.y }
       : state.dragging.cursorWorld;
     if (!b) return;
     const pA = w2s(a.x, a.y);
     const pB = w2s(b.x, b.y);
     const isBridge = state.dragging.isBridge;
-    // Glow casing
-    ctx.strokeStyle = isBridge ? 'rgba(160, 101, 195, 0.6)' : 'rgba(219, 109, 81, 0.6)';
-    ctx.lineWidth = Math.max(6, LANE_WIDTH_M * 1.2 * state.view.scale + 4);
+    // Glow
+    ctx.strokeStyle = isBridge ? 'rgba(160, 101, 195, 0.55)' : 'rgba(219, 109, 81, 0.55)';
+    ctx.lineWidth = 28 * state.view.scale;
     ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(pA.sx, pA.sy); ctx.lineTo(pB.sx, pB.sy); ctx.stroke();
-    // Inner line
+    // Inner
     ctx.strokeStyle = isBridge ? '#a065c3' : '#db6d51';
-    ctx.lineWidth = Math.max(3, LANE_WIDTH_M * state.view.scale);
+    ctx.lineWidth = 18 * state.view.scale;
     ctx.beginPath(); ctx.moveTo(pA.sx, pA.sy); ctx.lineTo(pB.sx, pB.sy); ctx.stroke();
     // Snap dots
     ctx.fillStyle = isBridge ? '#a065c3' : '#db6d51';
-    ctx.beginPath();
-    ctx.arc(pA.sx, pA.sy, 5, 0, Math.PI * 2); ctx.fill();
-    if (state.dragging.snapEndNode) {
-      ctx.beginPath();
-      ctx.arc(pB.sx, pB.sy, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(pA.sx, pA.sy, 6, 0, Math.PI * 2); ctx.fill();
+    if (state.dragging.snapEnd) {
+      ctx.beginPath(); ctx.arc(pB.sx, pB.sy, 6, 0, Math.PI * 2); ctx.fill();
     }
-  }
-
-  function roundedRect(x, y, w, h, r) {
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
   }
 
   // ================================================================
   // Interaction
   // ================================================================
   function setupInput() {
-    window.addEventListener('resize', () => { resizeCanvas(); });
+    window.addEventListener('resize', () => resizeCanvas());
 
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
@@ -1113,13 +756,11 @@
     canvas.addEventListener('pointerup', onPointerUp);
     canvas.addEventListener('pointercancel', onPointerUp);
 
-    // Toolbar
     document.querySelectorAll('.tool').forEach(btn => {
       btn.addEventListener('click', () => setTool(btn.dataset.tool));
     });
     setTool('road');
 
-    // HUD
     document.getElementById('btn-pause').addEventListener('click', togglePause);
     document.getElementById('btn-start').addEventListener('click', startGame);
     document.getElementById('btn-retry').addEventListener('click', restart);
@@ -1129,8 +770,6 @@
       if (e.key === 'Escape') state.dragging = null;
       if (e.key === '1') setTool('road');
       if (e.key === '2') setTool('bridge');
-      if (e.key === '3') setTool('roundabout');
-      if (e.key === '4') setTool('light');
       if (e.key === '5') setTool('erase');
     });
   }
@@ -1146,7 +785,7 @@
 
   function zoomAt(mx, my, factor) {
     const before = s2w(mx, my);
-    state.view.scale = Math.max(0.4, Math.min(12, state.view.scale * factor));
+    state.view.scale = Math.max(0.25, Math.min(4, state.view.scale * factor));
     const after = s2w(mx, my);
     state.view.originX += before.x - after.x;
     state.view.originY += before.y - after.y;
@@ -1167,21 +806,18 @@
     }
 
     const world = s2w(mx, my);
-    const isBuildTool = state.tool === 'road' || state.tool === 'bridge';
-    if (isBuildTool) {
-      // Start a drag-build
-      const snap = findNearestNode(world.x, world.y, 16);
+    if (state.tool === 'road' || state.tool === 'bridge') {
+      const snap = findNearestNode(world.x, world.y, 34);
       state.dragging = {
         startWorld: world,
-        snapStartNode: snap,
+        snapStart: snap,
         cursorWorld: world,
-        snapEndNode: null,
+        snapEnd: null,
         isBridge: state.tool === 'bridge'
       };
     } else {
       state.panActive = true;
       state.panFrom = { mx, my, ox: state.view.originX, oy: state.view.originY };
-      canvas.classList.add('grabbing');
     }
   }
 
@@ -1206,14 +842,14 @@
     const world = s2w(mx, my);
     if (state.dragging) {
       state.dragging.cursorWorld = world;
-      state.dragging.snapEndNode = findNearestNode(world.x, world.y, 16);
+      state.dragging.snapEnd = findNearestNode(world.x, world.y, 34);
     } else if (state.panActive && p) {
       const dx = (mx - state.panFrom.mx) / state.view.scale;
       const dy = (my - state.panFrom.my) / state.view.scale;
       state.view.originX = state.panFrom.ox - dx;
       state.view.originY = state.panFrom.oy - dy;
     } else {
-      state.hover = { node: findNearestNode(world.x, world.y, 14) };
+      state.hover = { node: findNearestNode(world.x, world.y, 30) };
     }
   }
 
@@ -1222,10 +858,7 @@
     const p = state.pointers.get(e.pointerId);
     state.pointers.delete(e.pointerId);
     if (state.pointers.size < 2) state.pinch = null;
-    if (state.pointers.size === 0) {
-      state.panActive = false;
-      canvas.classList.remove('grabbing');
-    }
+    if (state.pointers.size === 0) state.panActive = false;
 
     if (!p) return;
     const dt = performance.now() - p.startedAt;
@@ -1233,55 +866,29 @@
 
     if (state.dragging) {
       const d = state.dragging;
-      const endWorld = d.snapEndNode
-        ? { x: d.snapEndNode.x, y: d.snapEndNode.y }
-        : d.cursorWorld;
-      const startWorld = d.snapStartNode
-        ? { x: d.snapStartNode.x, y: d.snapStartNode.y }
-        : d.startWorld;
+      const end = d.snapEnd ? { x: d.snapEnd.x, y: d.snapEnd.y } : d.cursorWorld;
+      const start = d.snapStart ? { x: d.snapStart.x, y: d.snapStart.y } : d.startWorld;
       state.dragging = null;
-      const dist = Math.hypot(endWorld.x - startWorld.x, endWorld.y - startWorld.y);
-      if (dist < 15) {
-        // too-short drag = treat as tap on build tool, no-op
-      } else {
-        const res = addRoad(startWorld, endWorld, { isBridge: d.isBridge });
-        if (res.ok) toast(d.isBridge ? 'Bridge built.' : 'Road added.');
-        else toast(res.reason);
-      }
+      const dist = Math.hypot(end.x - start.x, end.y - start.y);
+      if (dist < 30) return;
+      const res = addRoad(start, end, { isBridge: d.isBridge });
+      if (res.ok) toast(d.isBridge ? 'Bridge built' : 'Road built');
+      else toast(res.reason);
       return;
     }
 
-    if (isTap) {
+    if (isTap && state.tool === 'erase') {
       const world = s2w(p.startX, p.startY);
-      handleTap(world);
-    }
-  }
-
-  function handleTap(world) {
-    if (state.tool === 'roundabout') {
-      const node = findNearestNode(world.x, world.y, 18);
-      if (!node) return toast('Tap a junction.');
-      const res = makeRoundabout(node.id);
-      if (!res.ok) toast(res.reason);
-      else toast('Roundabout built.');
-    } else if (state.tool === 'light') {
-      const node = findNearestNode(world.x, world.y, 18);
-      if (!node) return toast('Tap a junction.');
-      if (!node.junction) return toast('Only junctions can have signals.');
-      const on = node.ctrl !== 'signal';
-      setSignal(node.id, on);
-      toast(on ? 'Signal added.' : 'Signal removed.');
-    } else if (state.tool === 'erase') {
-      const edge = findNearestEdge(world.x, world.y, 16);
-      if (!edge) return toast('Tap a road to erase.');
-      if (!edge.custom) return toast('Can only erase roads you added.');
-      eraseEdge(edge);
-      toast('Road erased.');
+      const edge = findNearestEdge(world.x, world.y, 20);
+      if (!edge) return toast('Tap a road to erase');
+      if (!edge.custom) return toast('Only roads you added can be erased');
+      eraseEdgeById(edge);
+      toast('Road erased');
     }
   }
 
   let toastT = null;
-  function toast(msg, ms = 2000) {
+  function toast(msg, ms = 1700) {
     const el = document.getElementById('toast');
     el.textContent = msg;
     el.classList.remove('hidden');
@@ -1290,41 +897,65 @@
   }
 
   // ================================================================
-  // Game loop + state transitions
+  // Game state transitions
   // ================================================================
+  function buildLevel() {
+    // Create building nodes + queues
+    state.nodes.clear();
+    state.edges.length = 0;
+    state.buildings = [];
+    state.cars = [];
+    state.nextNodeId = 1;
+    state.nextEdgeId = 1;
+
+    // Insert buildings, create a node for each at their location.
+    for (const bp of LEVEL.buildings) {
+      const node = makeNode(bp.x, bp.y, { building: bp.id });
+      const b = { ...bp, nodeId: node.id, queue: [], timer: 0 };
+      state.buildings.push(b);
+    }
+
+    // Starter roads — each road from one building's node to another's by position matching.
+    for (const r of LEVEL.starterRoads) {
+      const startNode = findNearestNode(r.a.x, r.a.y, 6);
+      const endNode = findNearestNode(r.b.x, r.b.y, 6);
+      if (startNode && endNode) makeEdge(startNode, endNode);
+    }
+
+    rebuildAdjacency();
+  }
+
   function startGame() {
     document.getElementById('splash').classList.add('hidden');
     document.getElementById('hud').classList.remove('hidden');
     document.getElementById('toolbar').classList.remove('hidden');
     state.paused = false;
     state.started = true;
-    // Seed the scene with a handful of cars so it's immediately alive.
-    for (let i = 0; i < 12; i++) spawnCar();
-    // Advance a couple of sim seconds so the seeded cars aren't all bunched at pos 0.
+    // Seed with a few cars so the scene is immediately alive.
+    for (let i = 0; i < 6; i++) {
+      for (const b of state.buildings) {
+        if (b.kind === 'house') b.queue.push({ waitingSince: 0 });
+      }
+    }
     for (let i = 0; i < 80; i++) stepSim(0.05);
   }
   function restart() {
     document.getElementById('gameover').classList.add('hidden');
-    state.cars = [];
-    state.completed = 0;
-    state.throughputLog = [];
-    state.jamMeter = 0;
-    state.demand = DEMAND_START;
+    buildLevel();
     state.time = 0;
+    state.delivered = 0;
+    state.jamMeter = 0;
     state.over = false;
     state.paused = false;
-    // Rebuild from baked data to undo any player edits? Keep edits for now —
-    // it's their design.
+    startGame();
   }
   function endGame() {
     if (state.over) return;
     state.over = true;
     state.paused = true;
-    document.getElementById('go-score').textContent = state.completed;
-    const el = document.getElementById('gameover');
-    el.classList.remove('hidden');
+    document.getElementById('go-score').textContent = state.delivered;
+    document.getElementById('gameover').classList.remove('hidden');
   }
-
   function togglePause() {
     if (!state.started || state.over) return;
     state.paused = !state.paused;
@@ -1332,12 +963,13 @@
   }
 
   function updateHud() {
-    document.getElementById('m-done').textContent = state.completed;
-    const tpWin = Math.min(60, state.time);
-    const tp = tpWin > 0 ? (state.throughputLog.length / tpWin) * 60 : 0;
-    document.getElementById('m-flow').innerHTML = `${Math.round(tp)}<span class="u">/min</span>`;
-    const dmul = (state.demand / DEMAND_START).toFixed(1);
-    document.getElementById('m-demand').innerHTML = `${dmul}<span class="u">×</span>`;
+    document.getElementById('m-done').textContent = state.delivered;
+    // Flow = cars delivered per minute over the last 60s. Approximate with
+    // total delivered over elapsed time.
+    const ratePerMin = state.time > 0 ? (state.delivered / state.time) * 60 : 0;
+    document.getElementById('m-flow').innerHTML = `${Math.round(ratePerMin)}<span class="u">/min</span>`;
+    const dm = (SPAWN_INTERVAL_START / currentSpawnInterval()).toFixed(1);
+    document.getElementById('m-demand').innerHTML = `${dm}<span class="u">×</span>`;
     const fill = document.getElementById('jam-fill');
     fill.style.width = (state.jamMeter * 100).toFixed(0) + '%';
     fill.classList.toggle('warn', state.jamMeter > 0.35 && state.jamMeter < 0.7);
@@ -1357,19 +989,11 @@
   // ================================================================
   // Boot
   // ================================================================
-  (async () => {
+  (() => {
     canvas = document.getElementById('stage');
     ctx = canvas.getContext('2d');
     resizeCanvas();
-    try {
-      await loadData();
-    } catch (err) {
-      toast('Failed to load map.');
-      console.error(err);
-      return;
-    }
-    fitToNetwork(50);
-    ensureBgCache();
+    buildLevel();
     setupInput();
     requestAnimationFrame(frame);
   })();

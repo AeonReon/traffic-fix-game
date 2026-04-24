@@ -17,10 +17,10 @@
   <div id="splash" class="overlay">
     <div class="splash-card">
       <h1>Traffic Flow</h1>
-      <p class="sub">Fuengirola · A-7 Interchange</p>
-      <p class="blurb">Keep the cars moving as demand ramps up. Use the toolbar at the bottom: <b>drag</b> to build a road, <b>tap</b> a junction for a roundabout or a traffic light.</p>
+      <p class="sub">Keep the cars moving</p>
+      <p class="blurb">Houses send cars to their matching coloured shops. Drag on the canvas to build new roads that help them get there. Demand will keep rising — don't let any house back up too far.</p>
       <button id="btn-start" class="primary">Start</button>
-      <p class="hint">Pinch or scroll to zoom. The <b>Jam</b> bar at the top fills when queues pile up — don't let it reach red.</p>
+      <p class="hint"><b>Drag</b> with the Road tool to build a road. <b>Erase</b> to remove one.</p>
     </div>
   </div>
 
@@ -59,14 +59,6 @@
       <div class="tool-icon">⌒</div>
       <div class="tool-label">Bridge</div>
     </button>
-    <button class="tool" data-tool="roundabout">
-      <div class="tool-icon">◯</div>
-      <div class="tool-label">Roundabout</div>
-    </button>
-    <button class="tool" data-tool="light">
-      <div class="tool-icon">🚦</div>
-      <div class="tool-label">Signal</div>
-    </button>
     <button class="tool" data-tool="erase">
       <div class="tool-icon">✕</div>
       <div class="tool-label">Erase</div>
@@ -75,8 +67,8 @@
 
   <div id="gameover" class="overlay hidden">
     <div class="splash-card">
-      <h1 id="go-title">Gridlock!</h1>
-      <p class="blurb" id="go-message">The queues got out of hand.</p>
+      <h1 id="go-title">Gridlock</h1>
+      <p class="blurb" id="go-message">A house queue backed up too far.</p>
       <div class="big-number"><span id="go-score">0</span><span class="u">cars delivered</span></div>
       <button id="btn-retry" class="primary">Try again</button>
     </div>
