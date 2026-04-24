@@ -10,7 +10,8 @@
   // ================================================================
   // Portrait, with lots of vertical room to build around the W-E starter road.
   const LOGICAL_W = 1200;
-  const LOGICAL_H = 1600;
+  const LOGICAL_H = 1560;
+  const GRID = 60;           // grid spacing in world units
 
   // Car colour — single neutral slate. Drivers are drivers.
   const CAR_COLOR = '#3a4152';
@@ -21,15 +22,17 @@
   // Edge entries: cars enter from one side of the map, exit through another.
   // Coordinates sit just inside the logical 1200×800 area so they render as
   // gates on the border.
+  // All positions sit on grid points (multiples of GRID=60) so the starter
+  // network matches the grid the player is building against.
   const LEVEL = {
     entries: [
       { id: 'N', x:  600, y:   60, side: 'N', label: 'N' },
-      { id: 'S', x:  600, y: 1540, side: 'S', label: 'S' },
-      { id: 'W', x:   60, y:  800, side: 'W', label: 'W' },
-      { id: 'E', x: 1140, y:  800, side: 'E', label: 'E' }
+      { id: 'S', x:  600, y: 1500, side: 'S', label: 'S' },
+      { id: 'W', x:   60, y:  780, side: 'W', label: 'W' },
+      { id: 'E', x: 1140, y:  780, side: 'E', label: 'E' }
     ],
     starterRoads: [
-      { a: { x: 60, y: 800 }, b: { x: 1140, y: 800 } }
+      { a: { x: 60, y: 780 }, b: { x: 1140, y: 780 } }
     ]
   };
 
@@ -209,6 +212,13 @@
 
   // Return { edge, x, y } of the closest point lying on any edge within snapR
   // pixels, or null. Used for T-junction snapping.
+  function snapToGrid(x, y) {
+    return {
+      x: Math.round(x / GRID) * GRID,
+      y: Math.round(y / GRID) * GRID
+    };
+  }
+
   function findNearestEdgePoint(x, y, snapR) {
     let best = null, bestD = snapR * snapR;
     for (const e of state.edges) {
@@ -857,6 +867,7 @@
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.scale(state.view.dpr, state.view.dpr);
 
+    drawGrid();
     drawRoads();
     drawBlocks();
     drawEntries();
@@ -908,6 +919,30 @@
       ctx.lineTo(p.sx, p.sy);
     }
     ctx.stroke();
+  }
+
+  function drawGrid() {
+    // Only draw dots inside the visible viewport — saves a lot of work at zoom.
+    const tl = s2w(0, 0);
+    const br = s2w(state.view.w, state.view.h);
+    const minX = Math.max(0, Math.floor(tl.x / GRID) * GRID);
+    const maxX = Math.min(LOGICAL_W, Math.ceil(br.x / GRID) * GRID);
+    const minY = Math.max(0, Math.floor(tl.y / GRID) * GRID);
+    const maxY = Math.min(LOGICAL_H, Math.ceil(br.y / GRID) * GRID);
+
+    // Fade dots out at very far zoom-out so they don't clutter.
+    const alpha = Math.min(0.18, 0.06 + state.view.scale * 0.18);
+    ctx.fillStyle = `rgba(30, 35, 50, ${alpha})`;
+    const r = Math.max(1, 1.4 * state.view.scale);
+
+    for (let x = minX; x <= maxX; x += GRID) {
+      for (let y = minY; y <= maxY; y += GRID) {
+        const p = w2s(x, y);
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   // Adds a rounded-rect path to ctx — caller beginPath()/fill()/stroke() around it.
@@ -1044,9 +1079,11 @@
     const aPt = d.snapStart ? { x: d.snapStart.x, y: d.snapStart.y }
               : d.snapStartEdge ? { x: d.snapStartEdge.x, y: d.snapStartEdge.y }
               : d.startWorld;
+    // Free-end preview also snaps to the nearest grid point so the user sees
+    // exactly where the road will land.
     const bPt = d.snapEnd ? { x: d.snapEnd.x, y: d.snapEnd.y }
               : d.snapEndEdge ? { x: d.snapEndEdge.x, y: d.snapEndEdge.y }
-              : d.cursorWorld;
+              : snapToGrid(d.cursorWorld.x, d.cursorWorld.y);
     if (!bPt) return;
 
     const startOk = !!(d.snapStart || d.snapStartEdge);
@@ -1287,7 +1324,7 @@
                       : null;
       const endData   = d.snapEnd ? { node: d.snapEnd }
                       : d.snapEndEdge ? { edgePoint: d.snapEndEdge }
-                      : { freePoint: d.cursorWorld };
+                      : { freePoint: snapToGrid(d.cursorWorld.x, d.cursorWorld.y) };
       if (!startData) { toast('Start at a building or on a road'); return; }
       const startPt = startData.node ? startData.node : startData.edgePoint;
       const endPt   = endData.node   ? endData.node
@@ -1319,7 +1356,12 @@
 
     if (isTap && state.tool === 'block') {
       const world = s2w(p.startX, p.startY);
-      const res = placeBlock(world.x, world.y);
+      // If not snapping to existing network, fall back to the nearest grid point.
+      const sn = snapRadii();
+      const nodeHit = findNearestNode(world.x, world.y, sn.node * 1.3);
+      const edgeHit = !nodeHit ? findNearestEdgePoint(world.x, world.y, sn.edge * 1.3) : null;
+      const pt = (nodeHit || edgeHit) ? world : snapToGrid(world.x, world.y);
+      const res = placeBlock(pt.x, pt.y);
       if (!res.ok) return toast(res.reason);
       toast('Block placed');
     }
