@@ -85,6 +85,9 @@ html, body {
   font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-soft);
 }
 
+.splash-buttons {
+  display: flex; flex-direction: column; gap: 10px; align-items: center;
+}
 .primary {
   background: var(--accent); color: white;
   border: none; border-radius: 999px;
@@ -94,6 +97,15 @@ html, body {
 }
 .primary:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
 .primary:active { transform: translateY(0); }
+.secondary {
+  background: transparent; color: var(--ink-soft);
+  border: none; padding: 8px 14px;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer; border-radius: 999px;
+  transition: color 0.15s, background 0.15s;
+}
+.secondary:hover { color: var(--ink); background: rgba(42, 47, 60, 0.06); }
+.hidden { display: none !important; }
 
 .panel {
   position: absolute;
@@ -193,7 +205,11 @@ html, body {
 }
 .tool:hover { background: rgba(42, 47, 60, 0.1); color: var(--ink); }
 .tool:active { transform: translateY(1px); }
-.tool.active { background: var(--accent); border-color: var(--accent); color: white; box-shadow: 0 4px 14px rgba(219, 109, 81, 0.35); }
+.tool.active {
+  background: var(--accent); border-color: var(--accent); color: white;
+  box-shadow: 0 6px 18px rgba(219, 109, 81, 0.4);
+  transform: translateY(-1px);
+}
 .tool.tool-aux { background: transparent; }
 .tool.tool-aux .tool-icon { color: var(--ink-soft); }
 .tool.tool-aux:hover .tool-icon { color: var(--ink); }

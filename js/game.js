@@ -58,6 +58,10 @@
     mall:  { dwell: 4.0, size: 2, label: 'Mall'  }
   };
 
+  // Save / load
+  const SAVE_KEY = 'traffic-flow:v1';
+  const SAVE_VERSION = 1;
+
   // ================================================================
   // State
   // ================================================================
@@ -219,6 +223,87 @@
 
   // Return { edge, x, y } of the closest point lying on any edge within snapR
   // pixels, or null. Used for T-junction snapping.
+  // =============================================================
+  // Persistence — localStorage
+  // =============================================================
+  function serializeState() {
+    return {
+      v: SAVE_VERSION,
+      nodes: [...state.nodes.values()].map(n => ({
+        id: n.id, x: n.x, y: n.y,
+        entry: n.entry || null,
+        junction: !!n.junction,
+        degree: n.degree || 0
+      })),
+      edges: state.edges.map(e => ({
+        id: e.id, from: e.from, to: e.to,
+        shape: e.shape, length: e.length,
+        bridge: !!e.bridge, custom: !!e.custom
+      })),
+      blocks: state.blocks.map(b => ({
+        id: b.id, type: b.type, x: b.x, y: b.y,
+        nodeId: b.nodeId, visits: b.visits || 0,
+        dwell: b.dwell, size: b.size
+      })),
+      entries: state.entries.map(e => ({
+        id: e.id, x: e.x, y: e.y, side: e.side, label: e.label, nodeId: e.nodeId
+      })),
+      nextNodeId: state.nextNodeId,
+      nextEdgeId: state.nextEdgeId,
+      nextBlockId: state.nextBlockId,
+      demandMult: state.demandMult,
+      delivered: state.delivered,
+      visits: state.visits
+    };
+  }
+
+  function loadState(data) {
+    if (!data || data.v !== SAVE_VERSION) return false;
+    try {
+      state.nodes.clear();
+      for (const n of data.nodes) state.nodes.set(n.id, { ...n });
+      state.edges = data.edges.slice();
+      state.blocks = data.blocks.slice();
+      state.entries = data.entries.map(e => ({ ...e, queue: [], timer: 0 }));
+      state.nextNodeId = data.nextNodeId;
+      state.nextEdgeId = data.nextEdgeId;
+      state.nextBlockId = data.nextBlockId;
+      state.demandMult = data.demandMult ?? 1.0;
+      state.delivered = data.delivered || 0;
+      state.visits = data.visits || 0;
+      state.cars = [];
+      state.undoStack = [];
+      state.jamMeter = 0;
+      state.time = 0;
+      rebuildAdjacency();
+      return true;
+    } catch (err) {
+      console.warn('loadState failed:', err);
+      return false;
+    }
+  }
+
+  let saveTimer = null;
+  function scheduleSave() {
+    if (!state.started) return;  // don't save if player hasn't even started
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try {
+        localStorage.setItem(SAVE_KEY, JSON.stringify(serializeState()));
+      } catch (err) {
+        console.warn('save failed:', err);
+      }
+    }, 600);
+  }
+
+  function hasSavedCity() {
+    try { return !!localStorage.getItem(SAVE_KEY); } catch (_) { return false; }
+  }
+
+  function clearSavedCity() {
+    try { localStorage.removeItem(SAVE_KEY); } catch (_) {}
+  }
+
   function snapToGrid(x, y) {
     return {
       x: Math.round(x / GRID) * GRID,
@@ -423,6 +508,7 @@
     const [fwd, rev] = makeEdge(startNode, endNode, { custom: true, bridge: isBridge, shape });
     rebuildAdjacency();
     state.undoStack.push({ type: 'road', edgeIds: [fwd.id, rev.id] });
+    scheduleSave();
     return { ok: true };
   }
 
@@ -453,6 +539,7 @@
     state.blocks.push(block);
     rebuildAdjacency();
     state.undoStack.push({ type: 'block', blockId: block.id, nodeId: node.id });
+    scheduleSave();
     return { ok: true };
   }
 
@@ -464,12 +551,13 @@
       state.edges = state.edges.filter(e => !gone.has(e.id));
       state.cars = state.cars.filter(c => !c.path.some(e => gone.has(e.id)));
       rebuildAdjacency();
+      scheduleSave();
       return { ok: true, what: 'road' };
     }
     if (action.type === 'block') {
       state.blocks = state.blocks.filter(b => b.id !== action.blockId);
-      // Cars heading to this block: just remove them; re-spawning is easy.
       state.cars = state.cars.filter(c => c.blockId !== action.blockId);
+      scheduleSave();
       return { ok: true, what: 'block' };
     }
     return { ok: false };
@@ -573,6 +661,7 @@
     const modifiedIds = new Set(touching.map(e => e.id));
     state.cars = state.cars.filter(c => !c.path.some(e => modifiedIds.has(e.id)));
     rebuildAdjacency();
+    scheduleSave();
     return { ok: true };
   }
 
@@ -586,6 +675,7 @@
     state.edges = state.edges.filter(e => !gone.has(e.id));
     state.cars = state.cars.filter(c => !c.path.some(e => gone.has(e.id)));
     rebuildAdjacency();
+    scheduleSave();
   }
 
   // ================================================================
@@ -1306,7 +1396,27 @@
     setTool('road');
 
     document.getElementById('btn-pause').addEventListener('click', togglePause);
-    document.getElementById('btn-start').addEventListener('click', startGame);
+    document.getElementById('btn-start').addEventListener('click', () => {
+      if (hasSavedCity()) {
+        try {
+          const raw = localStorage.getItem(SAVE_KEY);
+          const data = JSON.parse(raw);
+          const ok = loadState(data);
+          startGame({ fresh: !ok });  // if restore failed, seed as fresh
+        } catch (err) {
+          console.warn('restore failed:', err);
+          buildLevel();
+          startGame({ fresh: true });
+        }
+      } else {
+        startGame({ fresh: true });
+      }
+    });
+    document.getElementById('btn-reset').addEventListener('click', () => {
+      clearSavedCity();
+      buildLevel();
+      startGame({ fresh: true });
+    });
     document.getElementById('btn-retry').addEventListener('click', restart);
     document.getElementById('btn-undo').addEventListener('click', () => {
       const res = undoLast();
@@ -1320,9 +1430,9 @@
       const raw = parseInt(demandSlider.value, 10);
       state.demandMult = raw / 100;
       demandVal.textContent = state.demandMult.toFixed(1) + '×';
+      scheduleSave();
     };
     demandSlider.addEventListener('input', applyDemand);
-    applyDemand();
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space') { togglePause(); e.preventDefault(); }
@@ -1557,17 +1667,26 @@
     rebuildAdjacency();
   }
 
-  function startGame() {
+  function startGame(opts = {}) {
     document.getElementById('splash').classList.add('hidden');
     document.getElementById('hud').classList.remove('hidden');
     document.getElementById('toolbar').classList.remove('hidden');
     state.paused = false;
     state.started = true;
-    // Seed with a few cars so the scene is immediately alive.
-    for (let i = 0; i < 4; i++) {
-      for (const e of state.entries) e.queue.push({ waitingSince: 0 });
+    // Sync demand slider to state (restored or default).
+    const slider = document.getElementById('demand-slider');
+    if (slider) {
+      slider.value = Math.round((state.demandMult || 1) * 100);
+      const vEl = document.getElementById('m-demand');
+      if (vEl) vEl.textContent = (state.demandMult || 1).toFixed(1) + '×';
     }
-    for (let i = 0; i < 80; i++) stepSim(0.05);
+    // Seed only on a fresh start — a loaded city already has infrastructure.
+    if (opts.fresh !== false) {
+      for (let i = 0; i < 4; i++) {
+        for (const e of state.entries) e.queue.push({ waitingSince: 0 });
+      }
+      for (let i = 0; i < 80; i++) stepSim(0.05);
+    }
   }
   function restart() {
     document.getElementById('gameover').classList.add('hidden');
@@ -1617,11 +1736,25 @@
   // ================================================================
   // Boot
   // ================================================================
+  function configureSplash() {
+    const saved = hasSavedCity();
+    const btnStart = document.getElementById('btn-start');
+    const btnReset = document.getElementById('btn-reset');
+    if (saved) {
+      btnStart.textContent = 'Continue';
+      btnReset.classList.remove('hidden');
+    } else {
+      btnStart.textContent = 'Start';
+      btnReset.classList.add('hidden');
+    }
+  }
+
   (() => {
     canvas = document.getElementById('stage');
     ctx = canvas.getContext('2d');
     resizeCanvas();
     buildLevel();
+    configureSplash();
     setupInput();
     requestAnimationFrame(frame);
   })();

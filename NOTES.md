@@ -9,6 +9,15 @@ Running notes so we don't lose direction between sessions.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v14 (persistence)** — localStorage save-and-restore.
+  Every meaningful edit (road, block, erase, undo, roundabout, demand
+  slider) triggers a 600ms debounced save. Boot detects a saved city
+  and flips the splash to "Continue" + "Start fresh" (secondary text
+  button). Restored cities drop the player into the game without
+  re-seeding the scene, so their cars respawn fresh but all
+  infrastructure + counters (delivered / visits) stay. Schema versioned
+  (v:1) — future breaking changes silently reset. Also: small CSS
+  polish on toolbar active state (subtle lift + stronger shadow).
 - **2026-04-24 — v13 (Stage A.1 finish + pressure rings)** — Weighted
   dispatch: cars rolling out of a gate now pick a destination *category*
   first (Mall 40 / Shop 30 / House 5 / Exit 25) and then a random
