@@ -117,6 +117,15 @@ mechanic choice.
   sequence (S1 scaffolding → S2 picker UI → S3 reset flow),
   acceptance criteria per ship. The single biggest replayability
   lever on the roadmap.
+- **`docs/research/make-it-a-game.md`** ⭐ **READ FIRST** — honest
+  diagnosis: we built a toy, not a game. Five mechanisms to fix it
+  without abandoning designer-driven ethos: organic growth prompts,
+  scenario targets, time-gated tool unlocks, city identity (name +
+  news + weekly summary), civic-investments closed score loop.
+  Four-ship plan: G1 identity → G2 growth → G3 unlocks → G4
+  targets. After these ship, the game should actually *feel* like
+  a game. Supersedes the optimization.md priority order for
+  anything not already in flight.
 
 ---
 

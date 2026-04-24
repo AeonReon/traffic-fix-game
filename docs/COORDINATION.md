@@ -82,6 +82,17 @@ Opinionated, sourced. Each ends with a prioritised "what to pull in" list.
   `data/scenarios.json`, terrain rendering rules (river, park, sea),
   per-scenario save slots with legacy-save migration, 3-ship
   implementation sequence. Biggest replay lever on the roadmap.
+- **`research/make-it-a-game.md`** ⭐ **NEW PRIORITY** — honest
+  diagnosis: current state is a toy, not a game. User feedback:
+  "it doesn't feel like a fun process to engage in." Five fixes
+  that preserve designer-driven principle: organic growth prompts
+  (city asks to grow), scenario targets (soft goals in HUD),
+  time-gated tool unlocks (Mini-Motorways-style weekly beats),
+  city identity (name + news ticker + weekly summary), civic
+  investments (closed score loop). 4-ship plan: G1 identity, G2
+  growth, G3 unlocks, G4 targets. **This supersedes the
+  optimization.md queue** — build session should pivot to G1 next
+  after current in-flight work.
 - **`research/sound.md`** — Web-Audio-only spec. 5 SFX (delivery
   chime pitched by building type, pad, click, jam tone, gate open)
   with runnable JS snippets. No audio files needed for v1.
