@@ -366,15 +366,16 @@
       return { ok: false, reason: 'Pick a different road for the other end' };
     }
 
-    function resolve(data) {
+    function resolve(data, allowFree) {
       if (data.node) return data.node;
       if (data.edgePoint) return splitEdgeAtPoint(data.edgePoint.edge, data.edgePoint.x, data.edgePoint.y);
+      if (allowFree && data.freePoint) return makeNode(data.freePoint.x, data.freePoint.y);
       return null;
     }
-    const startNode = resolve(startData);
+    const startNode = resolve(startData, false);   // start must be anchored
     if (!startNode) return { ok: false, reason: 'Start on a road or building' };
-    const endNode = resolve(endData);
-    if (!endNode) return { ok: false, reason: 'End on a road or building' };
+    const endNode = resolve(endData, true);        // end can be open space
+    if (!endNode) return { ok: false, reason: 'Invalid end' };
     if (startNode.id === endNode.id) return { ok: false, reason: 'Start and end are the same spot' };
 
     const shape = [
@@ -917,10 +918,9 @@
     if (!bPt) return;
 
     const startOk = !!(d.snapStart || d.snapStartEdge);
-    const endOk   = !!(d.snapEnd   || d.snapEndEdge);
-    const anchored = startOk && endOk;
-    const wouldCross = !d.isBridge && anchored && lineWouldCross(aPt, bPt, d);
-    const invalid = !anchored || wouldCross;
+    const endAnchored = !!(d.snapEnd || d.snapEndEdge);
+    const wouldCross = !d.isBridge && startOk && lineWouldCross(aPt, bPt, d);
+    const invalid = !startOk || wouldCross;
 
     const pA = w2s(aPt.x, aPt.y);
     const pB = w2s(bPt.x, bPt.y);
@@ -944,13 +944,22 @@
     ctx.setLineDash([]);
 
     ctx.fillStyle = inner;
+    ctx.strokeStyle = inner;
+    ctx.lineWidth = 2;
     if (startOk) {
       ctx.beginPath();
       ctx.arc(pA.sx, pA.sy, 6, 0, Math.PI * 2); ctx.fill();
     }
-    if (endOk) {
+    if (endAnchored) {
+      // Filled dot — the end snapped onto something.
       ctx.beginPath();
       ctx.arc(pB.sx, pB.sy, 6, 0, Math.PI * 2); ctx.fill();
+    } else if (startOk) {
+      // Hollow ring — the end is a dead-end in open space.
+      ctx.fillStyle = '#f4ead5';
+      ctx.beginPath();
+      ctx.arc(pB.sx, pB.sy, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.stroke();
     }
   }
 
@@ -1024,8 +1033,9 @@
 
     const world = s2w(mx, my);
     if (state.tool === 'road' || state.tool === 'bridge') {
-      const nodeSnap = findNearestNode(world.x, world.y, 38);
-      const edgeSnap = !nodeSnap ? findNearestEdgePoint(world.x, world.y, 22) : null;
+      const sn = snapRadii();
+      const nodeSnap = findNearestNode(world.x, world.y, sn.node);
+      const edgeSnap = !nodeSnap ? findNearestEdgePoint(world.x, world.y, sn.edge) : null;
       state.dragging = {
         startWorld: world,
         snapStart: nodeSnap,
@@ -1039,6 +1049,16 @@
       state.panActive = true;
       state.panFrom = { mx, my, ox: state.view.originX, oy: state.view.originY };
     }
+  }
+
+  // Snap radii in world units, scaled so they stay roughly constant in pixels
+  // at any zoom level (good for touch).
+  function snapRadii() {
+    const scale = Math.max(0.2, state.view.scale);
+    return {
+      node: 30 / scale,  // ≈30 screen px
+      edge: 22 / scale   // ≈22 screen px
+    };
   }
 
   function onPointerMove(e) {
@@ -1062,8 +1082,9 @@
     const world = s2w(mx, my);
     if (state.dragging) {
       state.dragging.cursorWorld = world;
-      const nodeSnap = findNearestNode(world.x, world.y, 38);
-      const edgeSnap = !nodeSnap ? findNearestEdgePoint(world.x, world.y, 22) : null;
+      const sn = snapRadii();
+      const nodeSnap = findNearestNode(world.x, world.y, sn.node);
+      const edgeSnap = !nodeSnap ? findNearestEdgePoint(world.x, world.y, sn.edge) : null;
       state.dragging.snapEnd = nodeSnap;
       state.dragging.snapEndEdge = edgeSnap;
     } else if (state.panActive && p) {
@@ -1090,19 +1111,20 @@
     if (state.dragging) {
       const d = state.dragging;
       state.dragging = null;
-      // Endpoints must snap to either a node or an existing road — otherwise
-      // the drawn road would have a floating dead-end that nothing can reach.
+      // Start must be on the network. End can be anywhere — an open-space
+      // endpoint creates a dead-end node you can continue building from.
       const startData = d.snapStart ? { node: d.snapStart }
                       : d.snapStartEdge ? { edgePoint: d.snapStartEdge }
                       : null;
       const endData   = d.snapEnd ? { node: d.snapEnd }
                       : d.snapEndEdge ? { edgePoint: d.snapEndEdge }
-                      : null;
+                      : { freePoint: d.cursorWorld };
       if (!startData) { toast('Start at a building or on a road'); return; }
-      if (!endData)   { toast('End at a building or on a road');   return; }
       const startPt = startData.node ? startData.node : startData.edgePoint;
-      const endPt   = endData.node   ? endData.node   : endData.edgePoint;
-      if (Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y) < 30) return;
+      const endPt   = endData.node   ? endData.node
+                    : endData.edgePoint ? endData.edgePoint
+                    : endData.freePoint;
+      if (Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y) < 30 / state.view.scale) return;
       const res = addRoad(startData, endData, { isBridge: d.isBridge });
       if (res.ok) toast(d.isBridge ? 'Bridge built' : 'Road built');
       else toast(res.reason);
