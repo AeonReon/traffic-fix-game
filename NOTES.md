@@ -9,6 +9,20 @@ Running notes so we don't lose direction between sessions.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v18 (score system + colour + ambient life)** —
+  Score is now the hero stat. Points per event: Mall visit +3, Shop
+  visit +2, House visit +1, Delivery +1. Best score persists across
+  resets. HUD shows current Score in big orange, "best N" underneath
+  when the current run is below peak. No game-over — it's pure
+  "how high can you push it before it clogs."
+  Entry gates now colour-coded by side: N sage, S dusty blue,
+  E warm peach, W muted lavender. Makes each direction memorable.
+  Ambient decor: a sparse procedural scatter of tree canopies and
+  grass tufts across empty land (seeded, so placements are stable
+  across reloads). Roads render on top so built-up areas still look
+  tidy. Gives the map a place-like feel instead of a blank page.
+  New favicon: little scene with a road, a pitched-roof house, an
+  office building and an orange car — matches the game's palette.
 - **2026-04-24 — v17 (one-way roads + SVG toolbar)** —
   New **One-way** tool (keyboard `3`): tap any road to remove its reverse
   twin and make it one-way; tap again to restore two-way. Cars respect

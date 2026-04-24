@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="description" content="Traffic Flow — redesign the real Fuengirola interchange. Drag roads, add roundabouts and bridges, keep the cars moving." />
 <title>Traffic Flow — Fuengirola</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='16' fill='%23f7f1e6'/><circle cx='32' cy='32' r='13' fill='none' stroke='%23db6d51' stroke-width='5'/><rect x='4' y='28' width='22' height='8' rx='4' fill='%232d3242'/><rect x='38' y='28' width='22' height='8' rx='4' fill='%232d3242'/></svg>" />
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%23f4ead5'/><rect x='0' y='27' width='64' height='10' fill='%232d3242'/><g stroke='%23ffebc9' stroke-width='1.3' stroke-linecap='round'><line x1='4' y1='32' x2='10' y2='32'/><line x1='16' y1='32' x2='22' y2='32'/><line x1='28' y1='32' x2='34' y2='32'/><line x1='40' y1='32' x2='46' y2='32'/><line x1='52' y1='32' x2='58' y2='32'/></g><polygon points='8,14 16,6 24,14' fill='%238a5c3e' stroke='%232a2f3c' stroke-width='0.7' stroke-linejoin='round'/><rect x='10' y='14' width='12' height='11' rx='1' fill='%23f0dbb2' stroke='%232a2f3c' stroke-width='0.7'/><rect x='40' y='40' width='20' height='17' rx='2' fill='%23b0b8c4' stroke='%232a2f3c' stroke-width='0.7'/><rect x='40' y='40' width='20' height='4' fill='%232a2f3c'/><rect x='44' y='48' width='3' height='4' fill='%23f4ead5' opacity='0.85'/><rect x='49' y='48' width='3' height='4' fill='%23f4ead5' opacity='0.85'/><rect x='54' y='48' width='3' height='4' fill='%23f4ead5' opacity='0.85'/><rect x='18' y='29' width='10' height='6' rx='1.8' fill='%23db6d51' stroke='%232a2f3c' stroke-width='0.5'/><rect x='23' y='30' width='3' height='4' rx='0.5' fill='%23f4ead5' opacity='0.55'/></svg>" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -29,17 +29,14 @@
 
   <div id="hud" class="panel hidden">
     <div class="hud-left">
+      <div class="stat stat-hero">
+        <span class="k">Score</span>
+        <span id="m-score" class="v">0</span>
+        <span class="best" id="m-best"></span>
+      </div>
       <div class="stat">
         <span class="k">People</span>
         <span id="m-pop" class="v">0</span>
-      </div>
-      <div class="stat">
-        <span class="k">Visits</span>
-        <span id="m-visits" class="v">0</span>
-      </div>
-      <div class="stat">
-        <span class="k">Delivered</span>
-        <span id="m-done" class="v">0</span>
       </div>
       <div class="stat">
         <span class="k">Flow</span>

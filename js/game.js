@@ -54,12 +54,14 @@
   const JAM_DRAIN_RATE = 0.06;
   const JAM_FAIL = 1.0;
 
-  // Building types (Stage A.1 — RESEARCH.md).
+  // Building types (Stage A.1 — RESEARCH.md). `points` = score awarded when
+  // a car visits this type of building.
   const BUILDING_TYPES = {
-    house: { dwell: 2.6, size: 1, label: 'House' },
-    shop:  { dwell: 2.0, size: 1, label: 'Shop'  },
-    mall:  { dwell: 4.0, size: 2, label: 'Mall'  }
+    house: { dwell: 2.6, size: 1, label: 'House', points: 1 },
+    shop:  { dwell: 2.0, size: 1, label: 'Shop',  points: 2 },
+    mall:  { dwell: 4.0, size: 2, label: 'Mall',  points: 3 }
   };
+  const DELIVERY_POINTS = 1;   // car reaches an exit gate
 
   // Save / load
   const SAVE_KEY = 'traffic-flow:v1';
@@ -93,6 +95,8 @@
     over: false,
     delivered: 0,
     visits: 0,
+    score: 0,
+    bestScore: 0,
     jamMeter: 0,
     demandMult: 1.0,
 
@@ -259,7 +263,9 @@
       nextBlockId: state.nextBlockId,
       demandMult: state.demandMult,
       delivered: state.delivered,
-      visits: state.visits
+      visits: state.visits,
+      score: state.score,
+      bestScore: state.bestScore
     };
   }
 
@@ -277,6 +283,8 @@
       state.demandMult = data.demandMult ?? 1.0;
       state.delivered = data.delivered || 0;
       state.visits = data.visits || 0;
+      state.score = data.score || 0;
+      state.bestScore = data.bestScore || 0;
       state.cars = [];
       state.undoStack = [];
       state.jamMeter = 0;
@@ -1073,11 +1081,16 @@
           car.speed = 0;
           if (block) {
             block.visits++;
+            const spec = BUILDING_TYPES[block.type];
+            state.score += (spec && spec.points) || 1;
             state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'visit' });
           }
           state.visits++;
+          if (state.score > state.bestScore) state.bestScore = state.score;
         } else {
           state.delivered++;
+          state.score += DELIVERY_POINTS;
+          if (state.score > state.bestScore) state.bestScore = state.score;
           const exit = state.entries.find(ee => ee.id === car.sinkEntryId);
           if (exit) state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'deliver' });
           toRemove.push(car);
@@ -1156,6 +1169,7 @@
     ctx.scale(state.view.dpr, state.view.dpr);
 
     drawGrid();
+    drawDecor();
     drawRoads();
     drawBlocks();
     drawEntries();
@@ -1240,6 +1254,65 @@
       ctx.lineTo(p.sx, p.sy);
     }
     ctx.stroke();
+  }
+
+  // Ambient decoration — sparse trees / grass tufts in "empty land" so the
+  // canvas doesn't feel like a blank page. Generated ONCE per level with a
+  // fixed seed so placements are stable across reloads.
+  function generateDecor() {
+    state.decor = [];
+    let seed = 1337;
+    const rand = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    for (let x = GRID; x < LOGICAL_W; x += GRID) {
+      for (let y = GRID; y < LOGICAL_H; y += GRID) {
+        if (rand() > 0.12) continue;
+        const kind = rand() < 0.35 ? 'tree' : 'grass';
+        state.decor.push({
+          x: x + (rand() - 0.5) * 28,
+          y: y + (rand() - 0.5) * 28,
+          kind,
+          size: 0.8 + rand() * 0.5,
+          tint: Math.floor(rand() * 4)
+        });
+      }
+    }
+  }
+
+  const TREE_TINTS = ['#8ea87c', '#7f9c70', '#9ab386', '#889e76'];
+  const GRASS_TINTS = ['rgba(132,165,110,0.5)', 'rgba(118,155,95,0.5)', 'rgba(145,175,120,0.55)', 'rgba(108,145,90,0.5)'];
+
+  function drawDecor() {
+    if (!state.decor) return;
+    const s = state.view.scale;
+    for (const d of state.decor) {
+      const p = w2s(d.x, d.y);
+      if (d.kind === 'tree') {
+        // Soft shadow
+        ctx.fillStyle = 'rgba(30, 35, 50, 0.12)';
+        ctx.beginPath();
+        ctx.ellipse(p.sx + 1.5, p.sy + 4 * s, 9 * s * d.size, 3 * s * d.size, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // Canopy
+        ctx.fillStyle = TREE_TINTS[d.tint % TREE_TINTS.length];
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, 8 * s * d.size, 0, Math.PI * 2);
+        ctx.fill();
+        // Darker inner crescent hint of volume
+        ctx.fillStyle = 'rgba(60, 85, 55, 0.22)';
+        ctx.beginPath();
+        ctx.arc(p.sx + 2 * s * d.size, p.sy + 2 * s * d.size, 5.5 * s * d.size, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // Grass tuft — three tiny dots in a cluster
+        ctx.fillStyle = GRASS_TINTS[d.tint % GRASS_TINTS.length];
+        const r = 1.8 * s * d.size;
+        ctx.beginPath();
+        ctx.arc(p.sx,        p.sy,         r, 0, Math.PI * 2);
+        ctx.arc(p.sx - 3 * s * d.size, p.sy + 1.5 * s * d.size, r, 0, Math.PI * 2);
+        ctx.arc(p.sx + 3 * s * d.size, p.sy + 1.5 * s * d.size, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   function drawGrid() {
@@ -1421,6 +1494,14 @@
     ctx.fillText('M', cx, cy - h / 2 + 4 * s);
   }
 
+  // Per-side pastel colour for entry gates — makes each direction memorable.
+  const GATE_COLORS = {
+    N: '#b8c9a8',  // sage
+    S: '#a8b8cc',  // dusty blue
+    E: '#e8b89a',  // warm peach
+    W: '#c8a8c8'   // muted lavender
+  };
+
   function drawEntries() {
     for (const e of state.entries) {
       const p = w2s(e.x, e.y);
@@ -1431,7 +1512,7 @@
       ctx.ellipse(p.sx, p.sy + 3 * state.view.scale, r * 0.95, r * 0.4, 0, 0, Math.PI * 2);
       ctx.fill();
       // Gate body — a rounded square tile with a little arrow pointing into the map
-      ctx.fillStyle = '#e8d59e';
+      ctx.fillStyle = GATE_COLORS[e.side] || '#e8d59e';
       ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
@@ -1910,6 +1991,8 @@
     state.nextEdgeId = 1;
     state.nextBlockId = 1;
     state.visits = 0;
+    state.score = 0;
+    // bestScore intentionally preserved across resets.
 
     for (const ep of LEVEL.entries) {
       const node = makeNode(ep.x, ep.y, { entry: ep.id });
@@ -1970,8 +2053,13 @@
   }
 
   function updateHud() {
-    document.getElementById('m-done').textContent = state.delivered;
-    document.getElementById('m-visits').textContent = state.visits;
+    document.getElementById('m-score').textContent = state.score;
+    const bestEl = document.getElementById('m-best');
+    if (bestEl) {
+      bestEl.textContent = state.bestScore > state.score
+        ? `best ${state.bestScore}`
+        : '';
+    }
     const pop = state.blocks.reduce((n, b) => n + (b.type === 'house' ? 2 : 0), 0);
     document.getElementById('m-pop').textContent = pop;
     const ratePerMin = state.time > 0 ? (state.delivered / state.time) * 60 : 0;
@@ -2014,6 +2102,7 @@
     ctx = canvas.getContext('2d');
     resizeCanvas();
     buildLevel();
+    generateDecor();
     configureSplash();
     setupInput();
     requestAnimationFrame(frame);
