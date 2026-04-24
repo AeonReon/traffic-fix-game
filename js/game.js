@@ -228,37 +228,85 @@
 
     const shapeA = pts.slice(0, bestI).concat([{ x: splitPt.x, y: splitPt.y }]);
     const shapeB = [{ x: splitPt.x, y: splitPt.y }].concat(pts.slice(bestI));
+    const lengthA = polyLen(shapeA);
+    const lengthB = polyLen(shapeB);
 
-    // Modify `edge` in place -> becomes first half.
     const oldTo = edge.to;
-    edge.to = newNode.id;
-    edge.shape = shapeA;
-    edge.length = polyLen(shapeA);
+    const oldLength = edge.length;
 
-    // Second half as new edge (same direction).
-    state.edges.push({
+    // Create the tail edge (forward direction, from split point to old destination).
+    const tailEdge = {
       id: state.nextEdgeId++,
       from: newNode.id, to: oldTo,
-      shape: shapeB, length: polyLen(shapeB),
+      shape: shapeB, length: lengthB,
       bridge: edge.bridge, custom: edge.custom
-    });
+    };
+    state.edges.push(tailEdge);
 
-    // Also split the reverse twin.
+    // Find the twin (reverse direction) and prepare its tail too.
     const twin = state.edges.find(x =>
-      x !== edge && x.from === oldTo &&
-      Math.abs(x.length - (edge.length + polyLen(shapeB))) < 3
+      x !== edge && x !== tailEdge &&
+      x.from === oldTo && x.to === edge.from &&
+      Math.abs(x.length - oldLength) < 3
     );
+    let twinTailEdge = null;
     if (twin) {
-      const twinOrigFrom = twin.from;
+      twinTailEdge = {
+        id: state.nextEdgeId++,
+        from: newNode.id, to: twin.to,
+        shape: shapeA.slice().reverse(), length: lengthA,
+        bridge: twin.bridge, custom: twin.custom
+      };
+      state.edges.push(twinTailEdge);
+    }
+
+    // Migrate any cars on these edges BEFORE mutating the edge objects —
+    // the critical bit that was causing "bounce backwards".
+    for (const car of state.cars) {
+      for (let i = 0; i < car.path.length; i++) {
+        const pe = car.path[i];
+        if (pe === edge) {
+          if (i < car.pathIdx) break;
+          if (i === car.pathIdx) {
+            if (car.pos > lengthA) {
+              // Car is past the split point — move it onto the tail.
+              car.path[i] = tailEdge;
+              car.pos -= lengthA;
+            } else {
+              // Still on the first half — insert the tail so it continues.
+              car.path.splice(i + 1, 0, tailEdge);
+            }
+          } else {
+            // Edge appears later in the path — will need the tail after.
+            car.path.splice(i + 1, 0, tailEdge);
+          }
+          break;
+        }
+        if (twin && pe === twin) {
+          if (i < car.pathIdx) break;
+          if (i === car.pathIdx) {
+            if (car.pos > lengthB) {
+              car.path[i] = twinTailEdge;
+              car.pos -= lengthB;
+            } else {
+              car.path.splice(i + 1, 0, twinTailEdge);
+            }
+          } else {
+            car.path.splice(i + 1, 0, twinTailEdge);
+          }
+          break;
+        }
+      }
+    }
+
+    // NOW mutate the original edge in place to become the first half.
+    edge.to = newNode.id;
+    edge.shape = shapeA;
+    edge.length = lengthA;
+    if (twin) {
       twin.to = newNode.id;
       twin.shape = shapeB.slice().reverse();
-      twin.length = polyLen(twin.shape);
-      state.edges.push({
-        id: state.nextEdgeId++,
-        from: newNode.id, to: twinOrigFrom,
-        shape: shapeA.slice().reverse(), length: polyLen(shapeA),
-        bridge: twin.bridge, custom: twin.custom
-      });
+      twin.length = lengthB;
     }
 
     return newNode;
@@ -305,8 +353,9 @@
     }
 
     rebuildAdjacency();
-    // Recompute routes for undelivered cars so they can take the new path if shorter.
-    refreshRoutes();
+    // Don't reroute in-flight cars — they keep their current path (with the
+    // tail edge spliced in by splitEdgeAtPoint). Newly spawned cars will
+    // automatically use whatever the shortest path is on the new network.
     return { ok: true };
   }
 
@@ -627,7 +676,7 @@
     }
     if (jamPressure > 0) state.jamMeter = Math.min(JAM_FAIL, state.jamMeter + JAM_FILL_RATE * dt * Math.max(1, jamPressure / 3));
     else state.jamMeter = Math.max(0, state.jamMeter - JAM_DRAIN_RATE * dt);
-    if (state.jamMeter >= JAM_FAIL) endGame();
+    // Sandbox mode — no game-over popup, just the visible jam bar.
   }
 
   // ================================================================
