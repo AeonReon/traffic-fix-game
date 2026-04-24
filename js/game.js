@@ -8,8 +8,9 @@
   // Level — pure pixel coords, fits into a logical 1200×800 space.
   // The renderer scales this to whatever screen it's on.
   // ================================================================
+  // Portrait, with lots of vertical room to build around the W-E starter road.
   const LOGICAL_W = 1200;
-  const LOGICAL_H = 800;
+  const LOGICAL_H = 1600;
 
   // Car colour — single neutral slate. Drivers are drivers.
   const CAR_COLOR = '#3a4152';
@@ -22,16 +23,13 @@
   // gates on the border.
   const LEVEL = {
     entries: [
-      { id: 'N', x: 600, y:  50,  side: 'N', label: 'North' },
-      { id: 'S', x: 600, y: 750,  side: 'S', label: 'South' },
-      { id: 'W', x:  50, y: 400,  side: 'W', label: 'West'  },
-      { id: 'E', x:1150, y: 400,  side: 'E', label: 'East'  }
+      { id: 'N', x:  600, y:   60, side: 'N', label: 'N' },
+      { id: 'S', x:  600, y: 1540, side: 'S', label: 'S' },
+      { id: 'W', x:   60, y:  800, side: 'W', label: 'W' },
+      { id: 'E', x: 1140, y:  800, side: 'E', label: 'E' }
     ],
-    // One pre-built road spanning W↔E so something moves on first boot.
-    // N and S are intentionally disconnected — building the first road
-    // between them is the tutorial moment.
     starterRoads: [
-      { a: { x: 50, y: 400 }, b: { x: 1150, y: 400 } }
+      { a: { x: 60, y: 800 }, b: { x: 1140, y: 800 } }
     ]
   };
 
@@ -54,23 +52,29 @@
   // State
   // ================================================================
   const state = {
-    entries: [],        // { id, x, y, side, nodeId, queue[], timer }
+    entries: [],
     nodes: new Map(),
     edges: [],
     adjacency: new Map(),
     nextNodeId: 1,
     nextEdgeId: 1,
 
+    blocks: [],         // { id, x, y, nodeId, visits }
+    nextBlockId: 1,
+
     cars: [],
     nextCarId: 1,
+
+    undoStack: [],      // [{ type: 'road' | 'block', ... }]
 
     time: 0,
     paused: true,
     started: false,
     over: false,
     delivered: 0,
+    visits: 0,
     jamMeter: 0,
-    demandMult: 1.0,    // slider-controlled 0..3
+    demandMult: 1.0,
 
     // Camera / view fitted to LOGICAL coords
     view: { scale: 1, originX: LOGICAL_W / 2, originY: LOGICAL_H / 2, dpr: window.devicePixelRatio || 1 },
@@ -399,9 +403,59 @@
       }
     }
 
-    makeEdge(startNode, endNode, { custom: true, bridge: isBridge, shape });
+    const [fwd, rev] = makeEdge(startNode, endNode, { custom: true, bridge: isBridge, shape });
     rebuildAdjacency();
+    state.undoStack.push({ type: 'road', edgeIds: [fwd.id, rev.id] });
     return { ok: true };
+  }
+
+  // Place a building block. Pass a world-coord point; if it's near an existing
+  // node or road, snap to it (so the block is automatically reachable); else
+  // create a free node (player must build a road to it).
+  function placeBlock(wx, wy) {
+    const sn = snapRadii();
+    const nodeSnap = findNearestNode(wx, wy, sn.node * 1.3);
+    const edgeSnap = !nodeSnap ? findNearestEdgePoint(wx, wy, sn.edge * 1.3) : null;
+
+    let node;
+    if (nodeSnap) node = nodeSnap;
+    else if (edgeSnap) node = splitEdgeAtPoint(edgeSnap.edge, edgeSnap.x, edgeSnap.y);
+    else node = makeNode(wx, wy);
+
+    // Don't place a block on top of an entry node.
+    if (node.entry) return { ok: false, reason: 'Can\'t place on a gate' };
+    // Don't double-place on the same node.
+    if (state.blocks.some(b => b.nodeId === node.id)) return { ok: false, reason: 'Block already here' };
+
+    const block = {
+      id: state.nextBlockId++,
+      x: node.x, y: node.y,
+      nodeId: node.id,
+      visits: 0
+    };
+    state.blocks.push(block);
+    rebuildAdjacency();
+    state.undoStack.push({ type: 'block', blockId: block.id, nodeId: node.id });
+    return { ok: true };
+  }
+
+  function undoLast() {
+    const action = state.undoStack.pop();
+    if (!action) return { ok: false, reason: 'Nothing to undo' };
+    if (action.type === 'road') {
+      const gone = new Set(action.edgeIds);
+      state.edges = state.edges.filter(e => !gone.has(e.id));
+      state.cars = state.cars.filter(c => !c.path.some(e => gone.has(e.id)));
+      rebuildAdjacency();
+      return { ok: true, what: 'road' };
+    }
+    if (action.type === 'block') {
+      state.blocks = state.blocks.filter(b => b.id !== action.blockId);
+      // Cars heading to this block: just remove them; re-spawning is easy.
+      state.cars = state.cars.filter(c => c.blockId !== action.blockId);
+      return { ok: true, what: 'block' };
+    }
+    return { ok: false };
   }
 
   function angleDiff(a, b) {
@@ -502,7 +556,6 @@
     const modifiedIds = new Set(touching.map(e => e.id));
     state.cars = state.cars.filter(c => !c.path.some(e => modifiedIds.has(e.id)));
     rebuildAdjacency();
-    refreshRoutes();
     return { ok: true };
   }
 
@@ -516,7 +569,6 @@
     state.edges = state.edges.filter(e => !gone.has(e.id));
     state.cars = state.cars.filter(c => !c.path.some(e => gone.has(e.id)));
     rebuildAdjacency();
-    refreshRoutes();
   }
 
   // ================================================================
@@ -557,32 +609,8 @@
     return chain;
   }
 
-  function refreshRoutes() {
-    // Recompute paths for cars that haven't started moving (still in queue)
-    // or are on a stale edge. For simplicity, recompute for all cars — if the
-    // current edge is no longer connected to their sink, drop them (they're
-    // on a dead-end the player erased).
-    const removed = [];
-    for (const car of state.cars) {
-      const toBuilding = state.buildings.find(b => b.id === car.sinkId);
-      if (!toBuilding) { removed.push(car); continue; }
-      // If car is still at the gate (pos==0 on first edge and in queue? no —
-      // in-queue cars aren't in state.cars). So just re-route from the current
-      // node (edge.to of current edge) to the sink node.
-      const curEdge = car.path[car.pathIdx];
-      if (!curEdge) continue;
-      // Route from the node we're heading toward to the sink's node.
-      const newPath = routeFromNode(curEdge.to, toBuilding.nodeId);
-      if (!newPath) { removed.push(car); continue; }
-      // Keep the current edge as we're on it; replace the remaining path.
-      car.path = [curEdge, ...newPath];
-      car.pathIdx = 0;
-    }
-    for (const c of removed) {
-      const i = state.cars.indexOf(c);
-      if (i >= 0) state.cars.splice(i, 1);
-    }
-  }
+  // (refreshRoutes removed — cars commit to their spawn-time path; in-flight
+  // re-routing produced the "bounce backwards" glitch.)
 
   // ================================================================
   // Spawning
@@ -595,39 +623,63 @@
 
   function tryDispatchFromQueue(entry) {
     if (entry.queue.length === 0) return;
-    // Pick a random other entry as the destination; try each in random order.
-    const others = state.entries.filter(e => e.id !== entry.id);
-    for (let i = others.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [others[i], others[j]] = [others[j], others[i]];
-    }
-    for (const target of others) {
-      const path = routeFromNode(entry.nodeId, target.nodeId);
-      if (!path || path.length === 0) continue;
 
-      // First edge must have room for a newly spawned car.
-      const firstEdge = path[0];
-      let blocked = false;
-      for (const c of state.cars) {
-        if (c.path[c.pathIdx] === firstEdge && c.pos < CAR_RADIUS * 2 + CAR_GAP + 6) {
-          blocked = true; break;
+    // 65% chance to visit a random block (if any exist and reachable),
+    // otherwise pass straight through to another edge.
+    const wantsBlock = state.blocks.length > 0 && Math.random() < 0.65;
+    let path = null, destKind = 'exit', destBlockId = null, destEntryId = null;
+
+    if (wantsBlock) {
+      const blocks = state.blocks.slice();
+      shuffle(blocks);
+      for (const b of blocks) {
+        const p = routeFromNode(entry.nodeId, b.nodeId);
+        if (p && p.length > 0) {
+          path = p; destKind = 'block'; destBlockId = b.id; break;
         }
       }
-      if (blocked) return;
+    }
 
-      const car = {
-        id: state.nextCarId++,
-        path, pathIdx: 0, pos: 0,
-        speed: 0, maxSpeed: CAR_SPEED,
-        color: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)],
-        sinkEntryId: target.id,
-        srcEntryId: entry.id,
-        spawnedAt: state.time,
-        stuckTime: 0
-      };
-      state.cars.push(car);
-      entry.queue.pop();
-      return;
+    if (!path) {
+      // Fallback to exit pass-through.
+      const others = state.entries.filter(e => e.id !== entry.id);
+      shuffle(others);
+      for (const target of others) {
+        const p = routeFromNode(entry.nodeId, target.nodeId);
+        if (p && p.length > 0) { path = p; destKind = 'exit'; destEntryId = target.id; break; }
+      }
+    }
+    if (!path) return;
+
+    // Check the first edge has room for a newly-spawned car.
+    const firstEdge = path[0];
+    for (const c of state.cars) {
+      if (c.path[c.pathIdx] === firstEdge && c.pos < CAR_RADIUS * 2 + CAR_GAP + 6) return;
+    }
+
+    const car = {
+      id: state.nextCarId++,
+      path, pathIdx: 0, pos: 0,
+      speed: 0, maxSpeed: CAR_SPEED,
+      color: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)],
+      destKind,               // 'block' | 'exit'
+      blockId: destBlockId,   // set only when visiting
+      srcEntryId: entry.id,
+      sinkEntryId: destEntryId,
+      spawnedAt: state.time,
+      stuckTime: 0,
+      hasVisited: false,
+      pauseUntil: 0,
+      needsReroute: false
+    };
+    state.cars.push(car);
+    entry.queue.pop();
+  }
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
     }
   }
 
@@ -657,6 +709,32 @@
 
     const toRemove = [];
     for (const car of state.cars) {
+      // Parked at a block — count as stopped until pauseUntil expires.
+      if (car.pauseUntil && state.time < car.pauseUntil) {
+        car.speed = 0;
+        continue;
+      }
+      // After pausing, reroute to a random exit (different from source).
+      if (car.needsReroute) {
+        car.needsReroute = false;
+        const curEdge = car.path[car.pathIdx];
+        const exits = state.entries.filter(e => e.id !== car.srcEntryId);
+        shuffle(exits);
+        let newPath = null, chosenExit = null;
+        for (const x of exits) {
+          const p = routeFromNode(curEdge.to, x.nodeId);
+          if (p) { newPath = p; chosenExit = x; break; }
+        }
+        if (!newPath) {
+          toRemove.push(car);
+          continue;
+        }
+        car.path = [curEdge, ...newPath];
+        car.pathIdx = 0;
+        car.destKind = 'exit';
+        car.sinkEntryId = chosenExit.id;
+      }
+
       const e = car.path[car.pathIdx];
       const list = byEdge.get(e.id) || [];
       const myIdx = list.indexOf(car);
@@ -707,8 +785,20 @@
         curE = car.path[car.pathIdx];
       }
       if (car.pathIdx >= car.path.length - 1 && car.pos >= car.path[car.path.length - 1].length) {
-        state.delivered++;
-        toRemove.push(car);
+        if (car.destKind === 'block' && !car.hasVisited) {
+          // Reached a block — park here briefly, then head out via a random exit.
+          car.hasVisited = true;
+          car.pauseUntil = state.time + 2.2;
+          car.needsReroute = true;
+          car.pos = car.path[car.path.length - 1].length - 0.5;
+          car.speed = 0;
+          const block = state.blocks.find(b => b.id === car.blockId);
+          if (block) block.visits++;
+          state.visits++;
+        } else {
+          state.delivered++;
+          toRemove.push(car);
+        }
       }
       if (car.stuckTime > 180) toRemove.push(car);
     }
@@ -768,6 +858,7 @@
     ctx.scale(state.view.dpr, state.view.dpr);
 
     drawRoads();
+    drawBlocks();
     drawEntries();
     drawCars();
     drawDragPreview();
@@ -817,6 +908,36 @@
       ctx.lineTo(p.sx, p.sy);
     }
     ctx.stroke();
+  }
+
+  function drawBlocks() {
+    const palette = ['#d4b68a', '#c6a18f', '#a8b890', '#b8c4a8', '#c8a881'];
+    for (const b of state.blocks) {
+      const p = w2s(b.x, b.y);
+      const r = 26 * state.view.scale;
+      // Shadow
+      ctx.fillStyle = 'rgba(30, 35, 50, 0.18)';
+      ctx.beginPath();
+      ctx.ellipse(p.sx + 2, p.sy + 5 * state.view.scale, r * 0.85, r * 0.35, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Building — soft rounded rectangle
+      const col = palette[b.id % palette.length];
+      ctx.fillStyle = col;
+      ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      roundedRect(p.sx - r * 0.85, p.sy - r * 0.85, r * 1.7, r * 1.7, r * 0.22);
+      ctx.fill();
+      ctx.stroke();
+      // Roof accent
+      ctx.fillStyle = 'rgba(30, 35, 50, 0.25)';
+      ctx.fillRect(p.sx - r * 0.85, p.sy - r * 0.85, r * 1.7, r * 0.22);
+      // Small window row
+      ctx.fillStyle = 'rgba(255, 250, 238, 0.7)';
+      for (let i = 0; i < 3; i++) {
+        ctx.fillRect(p.sx - r * 0.58 + i * r * 0.4, p.sy - r * 0.1, r * 0.22, r * 0.25);
+      }
+    }
   }
 
   function drawEntries() {
@@ -979,6 +1100,7 @@
     canvas.addEventListener('pointercancel', onPointerUp);
 
     document.querySelectorAll('.tool').forEach(btn => {
+      if (!btn.dataset.tool) return;  // skip aux buttons like Undo
       btn.addEventListener('click', () => setTool(btn.dataset.tool));
     });
     setTool('road');
@@ -986,6 +1108,11 @@
     document.getElementById('btn-pause').addEventListener('click', togglePause);
     document.getElementById('btn-start').addEventListener('click', startGame);
     document.getElementById('btn-retry').addEventListener('click', restart);
+    document.getElementById('btn-undo').addEventListener('click', () => {
+      const res = undoLast();
+      if (!res.ok) return toast(res.reason || 'Nothing to undo');
+      toast(res.what === 'road' ? 'Road undone' : 'Block undone');
+    });
 
     const demandSlider = document.getElementById('demand-slider');
     const demandVal = document.getElementById('m-demand');
@@ -1003,7 +1130,12 @@
       if (e.key === '1') setTool('road');
       if (e.key === '2') setTool('bridge');
       if (e.key === '3') setTool('roundabout');
+      if (e.key === '4') setTool('block');
       if (e.key === '5') setTool('erase');
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        document.getElementById('btn-undo').click();
+        e.preventDefault();
+      }
     });
   }
 
@@ -1170,6 +1302,13 @@
       if (!res.ok) return toast(res.reason);
       toast('Roundabout built');
     }
+
+    if (isTap && state.tool === 'block') {
+      const world = s2w(p.startX, p.startY);
+      const res = placeBlock(world.x, world.y);
+      if (!res.ok) return toast(res.reason);
+      toast('Block placed');
+    }
   }
 
   let toastT = null;
@@ -1188,9 +1327,13 @@
     state.nodes.clear();
     state.edges.length = 0;
     state.entries = [];
+    state.blocks = [];
     state.cars = [];
+    state.undoStack = [];
     state.nextNodeId = 1;
     state.nextEdgeId = 1;
+    state.nextBlockId = 1;
+    state.visits = 0;
 
     for (const ep of LEVEL.entries) {
       const node = makeNode(ep.x, ep.y, { entry: ep.id });
@@ -1243,6 +1386,7 @@
 
   function updateHud() {
     document.getElementById('m-done').textContent = state.delivered;
+    document.getElementById('m-visits').textContent = state.visits;
     const ratePerMin = state.time > 0 ? (state.delivered / state.time) * 60 : 0;
     document.getElementById('m-flow').innerHTML = `${Math.round(ratePerMin)}<span class="u">/min</span>`;
     // Demand label updated by slider handler, not here.

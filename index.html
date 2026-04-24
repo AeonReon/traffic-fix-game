@@ -31,6 +31,10 @@
         <span id="m-done" class="v">0</span>
       </div>
       <div class="stat">
+        <span class="k">Visits</span>
+        <span id="m-visits" class="v">0</span>
+      </div>
+      <div class="stat">
         <span class="k">Flow</span>
         <span id="m-flow" class="v">0<span class="u">/min</span></span>
       </div>
@@ -66,9 +70,17 @@
       <div class="tool-icon">◯</div>
       <div class="tool-label">Roundabout</div>
     </button>
+    <button class="tool" data-tool="block">
+      <div class="tool-icon">▢</div>
+      <div class="tool-label">Block</div>
+    </button>
     <button class="tool" data-tool="erase">
       <div class="tool-icon">✕</div>
       <div class="tool-label">Erase</div>
+    </button>
+    <button id="btn-undo" class="tool tool-aux" title="Undo (Cmd/Ctrl+Z)">
+      <div class="tool-icon">↶</div>
+      <div class="tool-label">Undo</div>
     </button>
   </div>
 

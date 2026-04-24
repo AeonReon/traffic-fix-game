@@ -194,6 +194,9 @@ html, body {
 .tool:hover { background: rgba(42, 47, 60, 0.1); color: var(--ink); }
 .tool:active { transform: translateY(1px); }
 .tool.active { background: var(--accent); border-color: var(--accent); color: white; box-shadow: 0 4px 14px rgba(219, 109, 81, 0.35); }
+.tool.tool-aux { background: transparent; }
+.tool.tool-aux .tool-icon { color: var(--ink-soft); }
+.tool.tool-aux:hover .tool-icon { color: var(--ink); }
 .tool.active .tool-label { color: white; }
 .tool-icon { font-size: 24px; line-height: 1; color: var(--ink); }
 .tool.active .tool-icon { color: white; }
