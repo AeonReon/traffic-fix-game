@@ -638,32 +638,56 @@
     return BASE_SPAWN_INTERVAL / m;
   }
 
+  // Category weights matching RESEARCH.md Stage A.1 — cars from an edge
+  // entry pick a destination *type* first, then a random instance of that
+  // type. If no instance exists, fall through to another category. That way
+  // Malls pull more cars than Shops pull more than Houses, and buildings
+  // feel meaningfully different from each other.
+  const DISPATCH_WEIGHTS = { mall: 40, shop: 30, house: 5, exit: 25 };
+
+  function pickDestinationCategory() {
+    const total = DISPATCH_WEIGHTS.mall + DISPATCH_WEIGHTS.shop + DISPATCH_WEIGHTS.house + DISPATCH_WEIGHTS.exit;
+    let r = Math.random() * total;
+    for (const cat of ['mall', 'shop', 'house', 'exit']) {
+      r -= DISPATCH_WEIGHTS[cat];
+      if (r <= 0) return cat;
+    }
+    return 'exit';
+  }
+
   function tryDispatchFromQueue(entry) {
     if (entry.queue.length === 0) return;
 
-    // 65% chance to visit a random block (if any exist and reachable),
-    // otherwise pass straight through to another edge.
-    const wantsBlock = state.blocks.length > 0 && Math.random() < 0.65;
+    // Try the rolled category first; if nothing routable, try the other
+    // categories in a random order before giving up this tick.
+    const order = ['exit', 'mall', 'shop', 'house'];
+    const rolled = pickDestinationCategory();
+    order.splice(order.indexOf(rolled), 1);
+    shuffle(order);
+    order.unshift(rolled);
+
     let path = null, destKind = 'exit', destBlockId = null, destEntryId = null;
 
-    if (wantsBlock) {
-      const blocks = state.blocks.slice();
-      shuffle(blocks);
-      for (const b of blocks) {
-        const p = routeFromNode(entry.nodeId, b.nodeId);
-        if (p && p.length > 0) {
-          path = p; destKind = 'block'; destBlockId = b.id; break;
+    outer:
+    for (const cat of order) {
+      if (cat === 'exit') {
+        const others = state.entries.filter(e => e.id !== entry.id);
+        shuffle(others);
+        for (const target of others) {
+          const p = routeFromNode(entry.nodeId, target.nodeId);
+          if (p && p.length > 0) {
+            path = p; destKind = 'exit'; destEntryId = target.id; break outer;
+          }
         }
-      }
-    }
-
-    if (!path) {
-      // Fallback to exit pass-through.
-      const others = state.entries.filter(e => e.id !== entry.id);
-      shuffle(others);
-      for (const target of others) {
-        const p = routeFromNode(entry.nodeId, target.nodeId);
-        if (p && p.length > 0) { path = p; destKind = 'exit'; destEntryId = target.id; break; }
+      } else {
+        const blocks = state.blocks.filter(b => b.type === cat);
+        shuffle(blocks);
+        for (const b of blocks) {
+          const p = routeFromNode(entry.nodeId, b.nodeId);
+          if (p && p.length > 0) {
+            path = p; destKind = 'block'; destBlockId = b.id; break outer;
+          }
+        }
       }
     }
     if (!path) return;
@@ -823,6 +847,16 @@
     }
     if (toRemove.length) state.cars = state.cars.filter(c => !toRemove.includes(c));
 
+    // Recompute per-building "incoming" car count for pressure-ring render.
+    // An incoming car is one whose current destination is this block and it
+    // hasn't arrived yet. Cheap — one pass through cars.
+    for (const b of state.blocks) b.incoming = 0;
+    for (const c of state.cars) {
+      if (c.destKind !== 'block' || c.hasVisited) continue;
+      const b = state.blocks.find(x => x.id === c.blockId);
+      if (b) b.incoming++;
+    }
+
     // Jam meter: fills when any entry queue is too long.
     let jamPressure = 0;
     for (const e of state.entries) {
@@ -973,8 +1007,36 @@
       const p = w2s(b.x, b.y);
       const s = state.view.scale;
       const type = b.type || 'shop';
-      // Shadow common to all types.
       const sizeMul = b.size === 2 ? 1.5 : 1;
+
+      // Pressure ring — Mini Metro-style arc behind the building. Fills up
+      // based on how many cars are heading here right now.
+      const incoming = b.incoming || 0;
+      const capacity = b.size === 2 ? 5 : 3;   // Mall handles more load
+      const pressure = Math.min(1, incoming / capacity);
+      if (pressure > 0.02) {
+        const ringR = 34 * s * sizeMul;
+        const ringW = Math.max(3, 4 * s);
+        // Soft backplate so the ring reads on the warm background.
+        ctx.fillStyle = 'rgba(30, 35, 50, 0.05)';
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, ringR + ringW / 2, 0, Math.PI * 2);
+        ctx.fill();
+        // Colour ramps from calm green → amber → alarm red.
+        const r = Math.round(79  + (219 - 79)  * pressure);
+        const g = Math.round(161 + (109 - 161) * pressure);
+        const bl= Math.round(106 + (81  - 106) * pressure);
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${bl}, ${0.35 + 0.45 * pressure})`;
+        ctx.lineWidth = ringW;
+        ctx.lineCap = 'round';
+        const start = -Math.PI / 2;
+        const end = start + pressure * Math.PI * 2;
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, ringR, start, end);
+        ctx.stroke();
+      }
+
+      // Shadow common to all types.
       ctx.fillStyle = 'rgba(30, 35, 50, 0.18)';
       ctx.beginPath();
       ctx.ellipse(p.sx + 2, p.sy + 5 * s, 26 * s * sizeMul, 10 * s * sizeMul, 0, 0, Math.PI * 2);

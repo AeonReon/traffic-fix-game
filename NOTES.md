@@ -9,6 +9,14 @@ Running notes so we don't lose direction between sessions.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v13 (Stage A.1 finish + pressure rings)** — Weighted
+  dispatch: cars rolling out of a gate now pick a destination *category*
+  first (Mall 40 / Shop 30 / House 5 / Exit 25) and then a random
+  instance of that type, falling through if there are none. Malls are
+  visibly more popular than Shops, Shops more than Houses. Added
+  Mini-Metro-style pressure rings behind each building that arc-fill
+  with incoming car count (green→amber→red). Capacity is 3 for Shops
+  and Houses, 5 for Malls. Visible signal for "the bottleneck is here."
 - **2026-04-24 — v12 (Stage A.1)** — Typed buildings: House, Shop, Mall
   replace the single "Block" tool. Distinct procedural renders per type
   (pitched-roof cottage, shop with awning, glass-front mall). Different
