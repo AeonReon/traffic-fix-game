@@ -9,6 +9,16 @@ Running notes so we don't lose direction between sessions.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v16 (houses as origins + People HUD + building variety)** —
+  Houses now generate their own traffic. Each house spawns a car every
+  5.5s (scaled by the Demand slider) heading to a random Mall / Shop /
+  edge-exit weighted 40 / 30 / 30. If nothing's reachable it falls
+  through. This is the conceptual unlock where the city itself
+  becomes the traffic source, not just pass-through from the edges.
+  Added a People stat on the HUD (houses × 2) for that city-growing
+  feel. Houses and Shops now draw with subtle per-instance colour
+  variation (5–6 swatches each) so a neighbourhood of houses looks
+  like a neighbourhood, not a clone farm.
 - **2026-04-24 — v15 (orthogonal drag + Stage E visual pass #1)** —
   Fixed the "slightly-angled road" bug: road drags with free ends now
   axis-align to the start. If the drag is clearly horizontal or

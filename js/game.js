@@ -46,6 +46,9 @@
   // Spawning — manually controlled by a HUD slider instead of auto-ramping.
   // Interval = BASE / demandMult. demandMult = 0 means paused.
   const BASE_SPAWN_INTERVAL = 1.6;
+  // Houses ALSO spawn cars (internal city traffic). Slower than edge gates
+  // individually, but with enough houses they produce the bulk of the load.
+  const HOUSE_SPAWN_INTERVAL = 5.5;
   const QUEUE_FAIL_SIZE = 9;
   const JAM_FILL_RATE = 0.14;
   const JAM_DRAIN_RATE = 0.06;
@@ -833,6 +836,72 @@
     entry.queue.pop();
   }
 
+  // Cars spawning FROM a house (internal traffic). Houses mostly drive their
+  // residents to Malls/Shops; sometimes they leave town entirely.
+  const HOUSE_WEIGHTS = { mall: 40, shop: 30, exit: 30 };
+
+  function tryDispatchFromHouse(house) {
+    const order = ['exit', 'mall', 'shop'];
+    const total = HOUSE_WEIGHTS.mall + HOUSE_WEIGHTS.shop + HOUSE_WEIGHTS.exit;
+    let r = Math.random() * total;
+    let rolled = 'exit';
+    for (const c of ['mall', 'shop', 'exit']) {
+      r -= HOUSE_WEIGHTS[c];
+      if (r <= 0) { rolled = c; break; }
+    }
+    order.splice(order.indexOf(rolled), 1);
+    shuffle(order);
+    order.unshift(rolled);
+
+    let path = null, destKind = 'exit', destBlockId = null, destEntryId = null;
+    outer:
+    for (const cat of order) {
+      if (cat === 'exit') {
+        const exits = state.entries.slice();
+        shuffle(exits);
+        for (const ex of exits) {
+          const p = routeFromNode(house.nodeId, ex.nodeId);
+          if (p && p.length > 0) {
+            path = p; destKind = 'exit'; destEntryId = ex.id; break outer;
+          }
+        }
+      } else {
+        const blocks = state.blocks.filter(b => b.type === cat && b.id !== house.id);
+        shuffle(blocks);
+        for (const b of blocks) {
+          const p = routeFromNode(house.nodeId, b.nodeId);
+          if (p && p.length > 0) {
+            path = p; destKind = 'block'; destBlockId = b.id; break outer;
+          }
+        }
+      }
+    }
+    if (!path) return;
+
+    // First edge must have room for a fresh car.
+    const firstEdge = path[0];
+    for (const c of state.cars) {
+      if (c.path[c.pathIdx] === firstEdge && c.pos < CAR_RADIUS * 2 + CAR_GAP + 6) return;
+    }
+
+    state.cars.push({
+      id: state.nextCarId++,
+      path, pathIdx: 0, pos: 0,
+      speed: 0, maxSpeed: CAR_SPEED,
+      color: CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)],
+      destKind,
+      blockId: destBlockId,
+      srcEntryId: null,          // came from a house, not an edge
+      srcBlockId: house.id,
+      sinkEntryId: destEntryId,
+      spawnedAt: state.time,
+      stuckTime: 0,
+      hasVisited: false,
+      pauseUntil: 0,
+      needsReroute: false
+    });
+  }
+
   function shuffle(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -853,6 +922,19 @@
         if (e.queue.length < 12) e.queue.push({ waitingSince: state.time });
       }
       tryDispatchFromQueue(e);
+    }
+
+    // Houses generate internal traffic to Shops / Malls / exits.
+    if (state.demandMult >= 0.02) {
+      const houseInterval = HOUSE_SPAWN_INTERVAL / state.demandMult;
+      for (const b of state.blocks) {
+        if (b.type !== 'house') continue;
+        b.timer = (b.timer || 0) + dt;
+        while (b.timer >= houseInterval) {
+          b.timer -= houseInterval;
+          tryDispatchFromHouse(b);
+        }
+      }
     }
 
     // Move cars.
@@ -1169,23 +1251,27 @@
       ctx.ellipse(p.sx + 2, p.sy + 5 * s, 26 * s * sizeMul, 10 * s * sizeMul, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      if (type === 'house') drawHouse(p.sx, p.sy, s);
+      if (type === 'house') drawHouse(p.sx, p.sy, s, b.id);
       else if (type === 'mall') drawMall(p.sx, p.sy, s);
-      else drawShop(p.sx, p.sy, s);
+      else drawShop(p.sx, p.sy, s, b.id);
     }
   }
 
-  function drawHouse(cx, cy, s) {
+  const HOUSE_BODY = ['#f0dbb2', '#ecd1a7', '#e9c899', '#eed7b3', '#e2c29a', '#f2e0ba'];
+  const HOUSE_ROOF = ['#8a5c3e', '#7d4f2f', '#94633e', '#80513a', '#a06846'];
+  const SHOP_AWNING = ['#db6d51', '#c74a3d', '#d6a05a', '#4fa16a', '#5987c2'];
+
+  function drawHouse(cx, cy, s, seed = 0) {
     const w = 40 * s, h = 34 * s;
     ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
     ctx.lineWidth = 1.5;
     // Body
-    ctx.fillStyle = '#f0dbb2';
+    ctx.fillStyle = HOUSE_BODY[seed % HOUSE_BODY.length];
     ctx.beginPath();
     roundedRect(cx - w / 2, cy - h / 2 + 6 * s, w, h - 6 * s, 3 * s);
     ctx.fill(); ctx.stroke();
     // Pitched roof triangle
-    ctx.fillStyle = '#8a5c3e';
+    ctx.fillStyle = HOUSE_ROOF[seed % HOUSE_ROOF.length];
     ctx.beginPath();
     ctx.moveTo(cx - w / 2 - 3 * s, cy - h / 2 + 6 * s);
     ctx.lineTo(cx, cy - h / 2 - 8 * s);
@@ -1201,7 +1287,7 @@
     ctx.fillRect(cx + 7 * s,  cy + 2 * s, 7 * s, 7 * s);
   }
 
-  function drawShop(cx, cy, s) {
+  function drawShop(cx, cy, s, seed = 0) {
     const w = 42 * s, h = 38 * s;
     ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
     ctx.lineWidth = 1.5;
@@ -1213,11 +1299,12 @@
     // Roof strip
     ctx.fillStyle = 'rgba(30, 35, 50, 0.32)';
     ctx.fillRect(cx - w / 2, cy - h / 2, w, 7 * s);
-    // Awning across the front
-    ctx.fillStyle = '#db6d51';
+    // Awning across the front — colour varies per shop
+    const awning = SHOP_AWNING[seed % SHOP_AWNING.length];
+    ctx.fillStyle = awning;
     const ay = cy - 2 * s, ah = 6 * s;
     ctx.fillRect(cx - w / 2, ay, w, ah);
-    // Zigzag edge under awning
+    // Zigzag edge under awning (same awning colour)
     ctx.beginPath();
     ctx.moveTo(cx - w / 2, ay + ah);
     for (let i = 0; i < 8; i++) {
@@ -1225,7 +1312,7 @@
       ctx.lineTo(x, ay + ah + 3 * s);
       ctx.lineTo(cx - w / 2 + (w / 8) * (i + 1), ay + ah);
     }
-    ctx.fillStyle = '#db6d51';
+    ctx.fillStyle = awning;
     ctx.fill();
     // Display window
     ctx.fillStyle = 'rgba(255, 250, 238, 0.85)';
@@ -1807,6 +1894,8 @@
   function updateHud() {
     document.getElementById('m-done').textContent = state.delivered;
     document.getElementById('m-visits').textContent = state.visits;
+    const pop = state.blocks.reduce((n, b) => n + (b.type === 'house' ? 2 : 0), 0);
+    document.getElementById('m-pop').textContent = pop;
     const ratePerMin = state.time > 0 ? (state.delivered / state.time) * 60 : 0;
     document.getElementById('m-flow').innerHTML = `${Math.round(ratePerMin)}<span class="u">/min</span>`;
     // Demand label updated by slider handler, not here.
