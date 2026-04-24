@@ -1108,6 +1108,7 @@
             state.score += pts;
             state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'visit' });
             state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'points', points: pts });
+            Audio.chime(block.type);
           }
           state.visits++;
           if (state.score > state.bestScore) state.bestScore = state.score;
@@ -1119,6 +1120,7 @@
           if (exit) {
             state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'deliver' });
             state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'points', points: DELIVERY_POINTS });
+            Audio.chime('exit');
           }
           toRemove.push(car);
         }
@@ -1827,6 +1829,10 @@
     setTool('road');
 
     document.getElementById('btn-pause').addEventListener('click', togglePause);
+    document.getElementById('btn-mute').addEventListener('click', () => {
+      Audio.setMuted(!Audio.muted);
+      syncMuteButton();
+    });
     document.getElementById('btn-start').addEventListener('click', () => {
       if (hasSavedCity()) {
         try {
@@ -1879,6 +1885,9 @@
       if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
         document.getElementById('btn-undo').click();
         e.preventDefault();
+      }
+      if (e.key === 'm' || e.key === 'M') {
+        document.getElementById('btn-mute').click();
       }
     });
   }
@@ -2030,7 +2039,7 @@
                     : endData.freePoint;
       if (Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y) < 30 / state.view.scale) return;
       const res = addRoad(startData, endData, { isBridge: d.isBridge });
-      if (res.ok) toast(d.isBridge ? 'Bridge built' : 'Road built');
+      if (res.ok) { toast(d.isBridge ? 'Bridge built' : 'Road built'); Audio.click(); }
       else toast(res.reason);
       return;
     }
@@ -2127,6 +2136,14 @@
     document.getElementById('btn-pause').textContent = '⏸';
     state.paused = false;
     state.started = true;
+    // Start audio (lazy init needs a user gesture — the Start click IS one).
+    try {
+      const savedMute = localStorage.getItem('traffic-flow:muted') === '1';
+      Audio.muted = savedMute;
+    } catch (_) {}
+    Audio.ensure();
+    Audio.startPad();
+    syncMuteButton();
     // Sync demand slider to state (restored or default).
     const slider = document.getElementById('demand-slider');
     if (slider) {
@@ -2159,6 +2176,13 @@
     document.getElementById('go-score').textContent = state.delivered;
     document.getElementById('gameover').classList.remove('hidden');
   }
+  function syncMuteButton() {
+    const btn = document.getElementById('btn-mute');
+    if (!btn) return;
+    btn.textContent = Audio.muted ? '🔇' : '🔊';
+    btn.setAttribute('aria-pressed', Audio.muted ? 'true' : 'false');
+  }
+
   function togglePause() {
     if (!state.started || state.over) return;
     state.paused = !state.paused;
@@ -2262,6 +2286,94 @@
     try { updateHud(); }  catch (err) { console.error('updateHud error:', err); }
     requestAnimationFrame(frame);
   }
+
+  // ================================================================
+  // =============================================================
+  // Audio — Web Audio API, lazy-init on first user gesture.
+  // Ships Pass 1 of docs/research/sound.md: delivery chimes, ambient
+  // pad, road-click, and a mute button. No audio files.
+  // =============================================================
+  const Audio = {
+    ctx: null,
+    master: null,
+    muted: false,
+    padStarted: false,
+    PITCH: {
+      house: 440.00,   // A4
+      shop:  523.25,   // C5
+      mall:  659.25,   // E5
+      exit:  349.23    // F4 — lower, for edge-gate deliveries
+    },
+    ensure() {
+      if (!this.ctx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        this.ctx = new AC();
+        this.master = this.ctx.createGain();
+        this.master.gain.value = this.muted ? 0 : 1;
+        this.master.connect(this.ctx.destination);
+      }
+      if (this.ctx.state === 'suspended') { try { this.ctx.resume(); } catch (_) {} }
+      return this.ctx;
+    },
+    setMuted(flag) {
+      this.muted = !!flag;
+      try { localStorage.setItem('traffic-flow:muted', flag ? '1' : '0'); } catch (_) {}
+      if (this.master) this.master.gain.setTargetAtTime(flag ? 0 : 1, this.ctx.currentTime, 0.05);
+    },
+    chime(kind) {
+      const ctx = this.ensure(); if (!ctx || this.muted) return;
+      const freq = this.PITCH[kind] || 440;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const t = ctx.currentTime;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.18, t + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+      osc.connect(g).connect(this.master);
+      osc.start(t);
+      osc.stop(t + 0.24);
+    },
+    click() {
+      const ctx = this.ensure(); if (!ctx || this.muted) return;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'square';
+      const t = ctx.currentTime;
+      osc.frequency.setValueAtTime(1200, t);
+      osc.frequency.exponentialRampToValueAtTime(240, t + 0.07);
+      g.gain.setValueAtTime(0.08, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+      osc.connect(g).connect(this.master);
+      osc.start(t);
+      osc.stop(t + 0.09);
+    },
+    startPad() {
+      const ctx = this.ensure(); if (!ctx || this.padStarted) return;
+      this.padStarted = true;
+      const o1 = ctx.createOscillator();
+      const o2 = ctx.createOscillator();
+      o1.type = o2.type = 'sawtooth';
+      o1.frequency.value = 110;
+      o2.frequency.value = 110 * Math.pow(2, 7 / 1200);  // +7 cents
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 800;
+      lp.Q.value = 0.5;
+      const lfo = ctx.createOscillator();
+      const lfoGain = ctx.createGain();
+      lfo.frequency.value = 0.2;
+      lfoGain.gain.value = 300;
+      lfo.connect(lfoGain).connect(lp.frequency);
+      const g = ctx.createGain();
+      g.gain.value = 0.05;
+      o1.connect(lp); o2.connect(lp);
+      lp.connect(g).connect(this.master);
+      [o1, o2, lfo].forEach(n => n.start());
+    }
+  };
 
   // ================================================================
   // Boot

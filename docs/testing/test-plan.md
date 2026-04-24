@@ -11,9 +11,14 @@ run it. Cull the least-valuable checks.
 
 - [ ] Page loads at https://traffic-fix-game.vercel.app without
       console errors.
-- [ ] Splash card appears with title, blurb, Start button.
-- [ ] Tapping Start dismisses splash and shows HUD + toolbar.
-- [ ] Starter W↔E road is visible; N and S entries are disconnected.
+- [ ] Splash card appears with title, blurb, Start button (fresh
+      profile / cleared localStorage).
+- [ ] With a saved city present, splash shows "Continue" primary +
+      "Start fresh" secondary.
+- [ ] Tapping Start / Continue dismisses splash, shows HUD +
+      toolbar.
+- [ ] Starter W↔E road is visible on fresh start; N and S entries
+      are disconnected.
 
 ## Roads
 
@@ -29,6 +34,24 @@ run it. Cull the least-valuable checks.
       reroute safely (no "ghost" cars).
 - [ ] Very short drags (< 30/scale px) are silently ignored (no
       toast, no road).
+- [ ] v15 orthogonal snap: a mostly-horizontal free-end drag ends
+      perfectly horizontal (y unchanged from start). Mostly-vertical
+      drag ends perfectly vertical. Diagonal drag snaps to 45°.
+
+## One-way (v17)
+
+- [ ] Tap a two-way road with One-way tool → becomes one-way in
+      the direction the road was originally built. Dashed centre
+      stripe is replaced by chevrons.
+- [ ] Tap again → restored to two-way. Chevrons gone, stripe back.
+- [ ] Toggle-toggle does NOT produce a double-rendered road
+      (known-issue P2 — expect this to fail until fixed).
+- [ ] Cars routing on a one-way road respect the direction (no
+      reverse traversal).
+- [ ] Undo a one-way toggle reverses it (known-issue P3 —
+      expected to fail).
+- [ ] Toggling a road with traffic on the twin side does NOT
+      silently drop cars (known-issue P3 — expected to fail).
 
 ## Roundabout
 
@@ -81,6 +104,20 @@ run it. Cull the least-valuable checks.
       spawn and exit; none get stuck trying to reach unreachable
       buildings.
 
+## House-origin traffic (v16)
+
+- [ ] Place a few Houses; with one Mall and one Shop also placed,
+      houses spawn their own cars heading to those destinations.
+- [ ] House-spawn rate scales with Demand slider (0× → no house
+      cars; 3× → ~3× faster).
+- [ ] House-origin car at an exit gate awards delivery points and
+      shows the "+1" popup.
+- [ ] A House with no reachable Mall/Shop/Exit silently stops
+      spawning that tick (no console errors).
+- [ ] After Continue from save, houses don't all fire in
+      lockstep (known-issue P4 — expected to fail).
+- [ ] People stat = Houses × 2 in HUD.
+
 ## Pressure rings (v13+)
 
 - [ ] Ring renders *behind* the building body, not on top.
@@ -101,21 +138,49 @@ run it. Cull the least-valuable checks.
 - [ ] Slider 3× produces visible queueing at entries.
 - [ ] Slider value displays correctly (e.g. "1.5×").
 
-## Persistence (RESEARCH.md #1 — currently NOT wired)
+## Persistence (v14 — wired)
 
-Once `loadState` is called from boot, these should pass. Until
-then, they all fail (see known-issue P1).
-
-- [ ] Place a building, refresh the page — building is still
-      there.
+- [ ] Place a building, refresh — building is still there.
 - [ ] Drag a custom road, refresh — road is still there.
 - [ ] Demand-slider position persists across refresh.
-- [ ] `delivered` / `visits` counters persist across refresh.
-- [ ] A "Resume city / Start fresh" choice appears on splash if
-      a saved city exists.
-- [ ] Saving works *after* a resume (second refresh retains
-      post-resume work — see known-issue P2 on
-      `state.started`).
+- [ ] Score + bestScore persist across refresh.
+- [ ] "Start fresh" wipes saved city; splash reverts to "Start" on
+      next boot.
+- [ ] Saving still works *after* a Continue (second refresh retains
+      post-resume work).
+- [ ] Refresh within 600ms of a road placement — road still there
+      (known-issue P3 debounce — expected to fail).
+- [ ] A corrupted `localStorage['traffic-flow:v1']` doesn't soft-
+      lock the splash on "Continue" forever (known-issue P3 —
+      expected to fail).
+- [ ] One-way toggles persist across refresh (no ghost twins
+      reappear).
+
+## Score + bestScore (v18)
+
+- [ ] Mall visit = +3, Shop = +2, House = +1, Exit delivery = +1.
+- [ ] Floating "+N" popup appears at the event location, rises
+      and fades (v20).
+- [ ] `best N` appears under current score only when the current
+      run is below the personal best.
+- [ ] bestScore is preserved across a "Start fresh" reset.
+
+## Visuals (v15 + v18–v20)
+
+- [ ] Cars render as oriented rectangles with windshield +
+      headlights (v15), using 10-colour pastel palette (v19).
+- [ ] Delivery burst ring: green at a building visit, orange at
+      an exit.
+- [ ] Queue dots at each gate are tinted in the gate's colour
+      (sage N / blue S / peach E / lavender W).
+- [ ] Ambient decor (trees, grass, flowers) renders between grid
+      and roads — roads cover it cleanly.
+- [ ] Canvas background uses a warm radial gradient (not flat
+      cream).
+- [ ] Toolbar icons show resting colour tints; active tool is
+      full orange.
+- [ ] Chevrons render along one-way roads; dashed centre stripe
+      renders along two-way roads only.
 
 ## Camera / touch
 
@@ -157,6 +222,7 @@ then, they all fail (see known-issue P1).
 
 ---
 
-_Last updated:_ 2026-04-24 — playtest session, post-v13 review
-(added Persistence, Undo, Weighted dispatch, Pressure rings
-sections; expanded Buildings; flagged known-issue cross-refs).
+_Last updated:_ 2026-04-24 — playtest session, post-v14–v20
+backlog-drain pass (added One-way, House-origin traffic, Score +
+bestScore, Visuals sections; rewrote Persistence to reflect v14
+wire-up; flagged new v17 known-issue cross-refs).

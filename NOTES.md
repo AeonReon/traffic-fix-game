@@ -5,7 +5,7 @@ Running notes so we don't lose direction between sessions.
 > **What's next:** see `RESEARCH.md` (the other session's roadmap).
 > **Coordination rules:** see `docs/COORDINATION.md`.
 
-## Current features (what the player can do today — v22)
+## Current features (what the player can do today — v23)
 
 Single source of truth for "what this game actually is right now."
 Update this list whenever a user-visible feature ships or is cut.
@@ -69,10 +69,29 @@ Update this list whenever a user-visible feature ships or is cut.
 - 2-finger drag = pan; pinch = zoom.
 - Touch-scaled snap radii.
 
+**Audio**
+- Ambient synth pad (two detuned saws, lowpass w/ LFO, very quiet).
+- Delivery chimes in a consonant pentatonic scale — House A4, Shop
+  C5, Mall E5, edge-exit delivery F4 (one octave lower).
+- Soft click when a road is successfully built.
+- Mute button in HUD (persists across reloads, `m` shortcut).
+
 ## Shipped log
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v23 (A3: sound pass 1)** — Shipped Pass 1 of
+  `docs/research/sound.md`. Web Audio API, lazy-init on Start button
+  (required for iOS Safari). No audio files — everything synthesised.
+  Content: (1) an ambient synth pad — two detuned sawtooth oscillators
+  through a lowpass filter at 800 Hz with a 0.2 Hz LFO modulating the
+  cutoff, master gain 0.05; (2) per-building delivery chimes on a
+  pentatonic scale — House A4, Shop C5, Mall E5, edge-exit F4
+  (lower octave), 180ms sine bursts with exponential envelopes; (3)
+  a soft square-wave click with pitch decay on every successful road
+  build. Mute button (🔊 / 🔇) in HUD with `m` keyboard shortcut.
+  Mute state persists in localStorage. Skipped jam-tone and gate-open
+  (research said Pass 1 only).
 - **2026-04-24 — v22 (A2: flow sparkline + peak callout)** — The
   Flow HUD stat now carries a 120×24 canvas sparkline showing the
   last 60 seconds of delivery rate (sampled once per simulated

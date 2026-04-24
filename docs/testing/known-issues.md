@@ -9,282 +9,346 @@ few weeks.
 
 ## Open
 
-### [P1] Persistence is write-only — saved city is never restored
-**Status:** open
-**Found:** 2026-04-24, static review at v13 commit `3777dda`
-**Repro:**
-1. Start the game, place a House and a Mall, drag a couple of
-   custom roads.
-2. Refresh the page (or close the tab and reopen).
-3. Observe the map resets to the starter W↔E road with no
-   buildings.
-**Expected:** The city you just built is restored (RESEARCH.md
-next-features #1 "localStorage persistence").
-**Actual:** Everything is lost. The saved blob *is* written to
-`localStorage['traffic-flow:v1']` on every change, but nothing
-reads it back.
-**Hypothesis:** `loadState`, `hasSavedCity` and `clearSavedCity`
-are all defined in `game.js` (lines ~260–305) but `grep` shows
-they are never called. The boot IIFE at the bottom calls
-`buildLevel()` unconditionally. Need to wire boot to
-`if (hasSavedCity()) loadState(...)` with a "Resume city /
-Start fresh" choice on the splash.
-**Impact:** Blocks the #1 research priority. Any session longer
-than a refresh is lost.
-
 ### [P1] Queue drain order is LIFO, not FIFO
-**Status:** open
-**Found:** 2026-04-24, v13 `3777dda`
-**Repro:** Hard to see visually — the queue dots render in order,
-but internally:
+**Status:** open (still present at v20 — unchanged since v13)
+**Found:** 2026-04-24, v13 `3777dda`; reconfirmed v20 `abc9670`
+**Repro:** Internal-only until a wait-time HUD ships:
 1. Set demand to 3× so a queue builds at the N gate.
 2. Drop demand to 0×.
 3. Raise demand to 1× once the first car dispatches.
 **Expected:** Cars dispatch in the order they arrived (oldest
 first — FIFO).
 **Actual:** `tryDispatchFromQueue` dispatches and then calls
-`entry.queue.pop()` (`game.js:802`), which removes the *newest*
-entry. The oldest car's `waitingSince` is never consumed.
+`entry.queue.pop()` (`game.js:891` at v20), which removes the
+*newest* entry. The oldest car's `waitingSince` is never consumed.
 **Hypothesis:** Should be `entry.queue.shift()`. Currently the
-queue acts like a stack: the first car parked at the gate sits
-there forever while later arrivals dispatch ahead of it.
-`waitingSince` is tracked but never displayed, so this is
-functionally invisible until someone adds a "longest wait"
-metric — but it's still wrong and will surface as a bug the
-moment that metric ships.
-**Impact:** Correctness bug in the core dispatch. Not visually
-obvious yet, but guaranteed to bite any feature that displays
-wait time.
+queue acts like a stack.
+**Impact:** Correctness bug in the core dispatch. Invisible today
+because wait-time isn't displayed; guaranteed to bite any feature
+that does.
 
 ### [P2] Undoing a building leaves an orphan split-node on the road
-**Status:** open
+**Status:** open (unchanged at v20)
 **Found:** 2026-04-24, v13 `3777dda`
 **Repro:**
-1. Drop a Shop tool onto the middle of the starter W↔E road.
-   `placeBlock` snaps to the edge and calls `splitEdgeAtPoint`,
-   creating a new node M on the road and two tail-halves of the
-   split edge.
+1. Drop a Shop onto the middle of the starter W↔E road.
+   `placeBlock` calls `splitEdgeAtPoint`, creating a new node M on
+   the road plus two tail halves.
 2. Press Undo.
-**Expected:** The road is restored to its original single edge;
-node M is gone.
-**Actual:** `undoLast` removes only `state.blocks[]` entry, not
-the split node M or the tail edges (`game.js:557-561`). The road
-stays split. Cars continue to traverse it fine, but the
-junction node M is now an orphan T-junction with no building.
+**Expected:** Road is a single edge again; node M is gone.
+**Actual:** `undoLast` (v20 `game.js:593-611`) only filters
+`state.blocks`, never merges the split back or removes M. Cars
+still route fine, but M is a phantom T-junction that can be
+snap-targeted by later drags.
 **Hypothesis:** The `block` undo record needs to remember whether
-`placeBlock` created a new node via `splitEdgeAtPoint` and, if
-so, re-merge the edges and drop M.
-**Impact:** Visible as a floating snap-point on the road; also
-means "undo" is not a true inverse of "place". Compounds if the
-player places → undos several times in the same spot.
+`placeBlock` created a new node and, if so, re-merge the split
+edges and drop M.
+**Impact:** Visible as a floating snap-point. Undo is no longer a
+true inverse of Place.
 
 ### [P2] Undoing a road leaves orphan endpoint nodes
-**Status:** open
+**Status:** open (unchanged at v20)
 **Found:** 2026-04-24, v13 `3777dda`
 **Repro:**
-1. With Road tool, drag from the starter road into empty space
-   (creates a free-end dead-end node N).
+1. With Road tool, drag from the starter into empty space (creates
+   free-end node N).
 2. Press Undo.
-**Expected:** Road and its dead-end node N both disappear.
-**Actual:** Road edges are filtered out of `state.edges`, but N
-remains in `state.nodes`. N is invisible (no marker) but still a
-snap target: a later Road drag can snap-start on it.
-**Hypothesis:** `undoLast.type === 'road'` (`game.js:549-555`)
-filters edges only. Roads created via `addRoad` can create 0, 1
-or 2 new nodes (start-edge split, end-free-node, or end-edge
-split). The undo record needs `nodeIds: [...]` so they can be
-culled, with guards against removing nodes that other edges or
-blocks still reference.
-**Impact:** Accumulates phantom snap-points in areas where the
-player has been experimenting. Makes the "clean blank slate"
-impression of Undo false.
+**Expected:** Road and N both disappear.
+**Actual:** Edges are removed (`game.js:596-602`) but N stays in
+`state.nodes`. Invisible but snap-targetable.
+**Hypothesis:** Undo record needs `nodeIds: [...]` plus a guard
+that only removes nodes with no remaining edges, no building, no
+entry flag.
+**Impact:** Phantom snap-points accumulate where the player has
+been experimenting.
 
-### [P2] Pressure ring saturates at capacity — can't tell "busy" from "broken"
-**Status:** open
+### [P2] Pressure ring saturates at capacity — worst jams look like mild ones
+**Status:** open (unchanged at v20)
 **Found:** 2026-04-24, v13 `3777dda`
 **Repro:**
-1. Place a single Shop far from the gates so many cars have to
-   path to it.
-2. Crank demand to 3× and wait 60s.
-**Expected:** As more and more cars pile up heading for the Shop,
-the ring keeps giving a stronger signal — e.g. pulsing, or a
-second concentric ring, or exceeding the full circle somehow.
-**Actual:** `pressure = Math.min(1, incoming / capacity)`
-(`game.js:1102`) caps at 1.0. Once `incoming === capacity` the
-arc is a full 2π circle and the colour is fully red. Any further
-congestion looks identical — a shop with 3 incoming and a shop
-with 30 incoming render the same ring.
-**Hypothesis:** Either (a) let `pressure` exceed 1.0 and drive a
-pulsing/blinking secondary effect, or (b) render a second thin
-inner ring whose fill = `(incoming - capacity) / capacity`.
-Either way the "THIS is the bottleneck" signal — the entire
-point of the feature — needs a way to differentiate severity
-past 100%.
-**Impact:** Feature that shipped as the per-building "bottleneck
-here" signal loses its strongest case (the *worst* bottleneck
-looks identical to a mild one).
+1. Place one Shop far from the gates.
+2. Demand 3× for 60s.
+**Expected:** Ring visually differentiates "busy" from "severely
+backed up."
+**Actual:** `pressure = Math.min(1, incoming / capacity)` (v20
+`game.js:1415`). At incoming = 3 the ring is already a full red
+circle. Incoming = 30 renders identical.
+**Hypothesis:** (a) allow `pressure` > 1 and pulse/blink the
+arc, or (b) draw an inner second ring whose fill = overflow /
+capacity.
+**Impact:** Feature's strongest case — "THIS is the bottleneck"
+— fails at the worst moment.
 
-### [P2] Weighted dispatch fallback is uniform, not weighted
-**Status:** open
-**Found:** 2026-04-24, v13 `3777dda`
+### [P2] Weighted-dispatch fallback is uniform, not weighted (edge + house)
+**Status:** open, now applies to two call sites
+**Found:** 2026-04-24, v13 `3777dda` (edge dispatch); v16
+`2590590` introduced the same flaw in house dispatch
 **Repro:**
-1. Place a House and a Shop, **no** Mall.
-2. Watch which buildings get visited over a minute at demand 3×.
-**Expected:** With Mall 40 / Shop 30 / House 5 / Exit 25 weights,
-rolls that land on Mall should fall back *weighted* — i.e. the
-40% Mall share should distribute roughly Shop:House:Exit = 30:5:25
-among the remaining categories.
-**Actual:** `tryDispatchFromQueue` (`game.js:743-777`) shuffles
-the non-rolled categories uniformly and picks the first routable
-one. So a Mall roll becomes a *uniform* roll over {Shop, House,
-Exit} when no Mall exists.
-**Hypothesis:** Either re-roll using the remaining-category
-weights (clean fix) or iterate in a weight-sorted order. Minor
-impact while Malls are common, but when the player hasn't
-unlocked/built a Mall yet, Houses get 1/3 of the traffic instead
-of 5/60.
-**Impact:** The stated building-weight balance (the whole point
-of typed buildings) subtly breaks whenever any category is
-empty. Houses in particular get over-visited in early-game
-layouts.
+1. Place one House and one Shop, **no Mall**.
+2. Watch visit distribution for 60s at demand 3×.
+**Expected:** Mall rolls fall back proportionally to the
+remaining weights (Shop 30 : House 5 : Exit 25).
+**Actual:** Both `tryDispatchFromQueue` (`game.js:832`) and
+`tryDispatchFromHouse` (`game.js:898`) shuffle the non-rolled
+categories uniformly and pick the first routable one.
+**Hypothesis:** Share one helper that re-rolls against the
+remaining weights; call it from both dispatch paths.
+**Impact:** Houses over-receive / over-send in early-game
+layouts. Stated weighting breaks whenever any category is empty.
 
-### [P2] loadState skips `state.started`, so post-load writes won't persist
-**Status:** open
-**Found:** 2026-04-24, v13 `3777dda` (only relevant once Issue #1
-above is fixed — but worth fixing at the same time to avoid a
-second round of debugging)
-**Repro:** once persistence is wired,
-1. Save city, refresh, resume.
-2. Place a new building.
-3. Refresh again.
-**Expected:** The new building is still there.
-**Actual:** `loadState` (`game.js:260-284`) doesn't set
-`state.started = true`. `scheduleSave` early-returns when
-`!state.started` (`game.js:288`). So every placement after a
-resume silently fails to persist.
-**Hypothesis:** Add `state.started = true; state.paused = false;`
-at the end of `loadState`, or have the "Resume" splash button
-set `state.started` before/after calling `loadState`.
-**Impact:** Resume looks like it works, but then the player
-rebuilds more of the city thinking it's saved, and the second
-refresh wipes only the new work. Worst kind of persistence bug.
+### [P2] One-way toggle can produce double-rendered edges
+**Status:** open, new in v17
+**Found:** 2026-04-24, v17 `f726e8c`
+**Repro:**
+1. Drag any road to build it.
+2. With One-way tool, tap it → becomes one-way (twin deleted).
+3. Tap again → becomes two-way (new twin added).
+4. Inspect the road visually, or `state.edges`.
+**Expected:** The re-added twin has an even id and `drawRoads`
+dedupes correctly.
+**Actual:** `makeEdge` creates fwd/rev in a single increment
+pair, so IDs alternate odd/even. `toggleOneWay` (`game.js:694-735`)
+calls `state.nextEdgeId++` once on re-add — whatever parity the
+counter is sitting on. When `nextEdgeId` is odd at that moment,
+both halves of the pair end up with odd IDs.
+Every render-loop pass uses `if (e.id % 2 === 0) continue;` to
+dedupe — with two odd IDs, the road body, centre stripe, and
+shadow are drawn **twice**. `findNearestEdge` sees two candidates
+at the same position too.
+**Hypothesis:** Keep the odd/even pair invariant: in `toggleOneWay`,
+if `state.nextEdgeId % 2 === 1` bump it once before assigning the
+twin's id, so the new twin always lands on an even id. Or switch
+`drawRoads` / `findNearestEdge` to a `Set` of already-seen
+(from,to) pairs rather than relying on id parity.
+**Impact:** Visual doubling (slightly thicker line, darker stripe)
+on any road that's been toggled one-way → two-way at least once.
+Persists across save/load.
+
+### [P3] One-way toggle is not undoable
+**Status:** open, new in v17
+**Found:** 2026-04-24, v17 `f726e8c`
+**Repro:**
+1. Tap a road with One-way → becomes one-way.
+2. Press Undo.
+**Expected:** Road returns to two-way.
+**Actual:** `toggleOneWay` doesn't push anything to
+`state.undoStack`. Undo silently steps past it to the previous
+action.
+**Hypothesis:** Push a `{ type: 'oneway', edgeId }` record;
+`undoLast` handles it by calling `toggleOneWay` again.
+**Impact:** Muscle-memory "oops, undo" doesn't work for
+direction changes, unlike roads/blocks/erase.
+
+### [P3] Cars traversing a twin vanish when it's toggled off
+**Status:** open, new in v17
+**Found:** 2026-04-24, v17 `f726e8c`
+**Repro:**
+1. With demand at 2× so there's live traffic, wait for a car
+   to start crossing a road.
+2. Tap that road with One-way in the direction *opposite* to the
+   car's travel.
+**Expected:** The car is either re-routed, or the toggle is
+rejected while the twin has traffic on it.
+**Actual:** `toggleOneWay` filters `state.cars` by
+`path.some(e => e.id === twin.id)` and drops them (`game.js:705`).
+Any car on the deleted twin just disappears.
+**Hypothesis:** Either re-route affected cars (like
+`splitEdgeAtPoint` does) or mark the twin as "pending deletion"
+and wait until it's empty.
+**Impact:** Surprise "ghost" disappearance. Surprisingly easy to
+trigger at demand 2×+.
+
+### [P3] Corrupted save never self-clears — "Continue" silently fails forever
+**Status:** open, new in v14
+**Found:** 2026-04-24, v14 `21e3a5a`
+**Repro:**
+1. Build a city (triggers a save).
+2. Manually corrupt `localStorage['traffic-flow:v1']` (dev-tools)
+   — or swap to a future SAVE_VERSION in code.
+3. Refresh.
+**Expected:** Splash either doesn't show Continue, or clicking
+Continue warns and clears the bad blob.
+**Actual:** `hasSavedCity()` returns `true` (blob exists), so the
+splash shows Continue. Clicking it lands in the `catch` branch of
+`btn-start` (`game.js:1803-1807`) which logs `'restore failed'`
+and silently falls through to a fresh start — but does **not**
+call `clearSavedCity()`. Next boot, same thing. The player sees
+"Continue" forever, but every click drops them into a fresh
+world.
+**Hypothesis:** In the catch branch, call `clearSavedCity()` and
+`configureSplash()` so the splash reverts to Start.
+**Impact:** Low-probability in practice, but a terrible UX when
+it happens (player can't get their "Continue" to work and doesn't
+know why). Also triggers on any future schema version bump.
+
+### [P3] Save debounce drops the last action on fast refresh
+**Status:** open, new in v14
+**Found:** 2026-04-24, v14 `21e3a5a`
+**Repro:**
+1. Build a road, then immediately Cmd-R (< 600ms later).
+2. Refresh, click Continue.
+**Expected:** The road is there.
+**Actual:** `scheduleSave` uses a 600ms `setTimeout` debounce
+(`game.js:296`). A refresh inside the window cancels the pending
+save. The road is lost.
+**Hypothesis:** Add a `beforeunload` handler that flushes any
+pending `saveTimer` synchronously, or drop the debounce and just
+write every change (payload is small).
+**Impact:** Low but non-zero — any hasty action-then-refresh loses
+up to one action. More visible on tablet where swipe-to-close is
+fast.
 
 ### [P3] loadState persists dead schema fields (`junction`, `degree`)
-**Status:** open
+**Status:** open (unchanged)
 **Found:** 2026-04-24, v13 `3777dda`
-**Repro:** Inspect `serializeState()` (`game.js:229-258`).
-**Expected:** Saved node shape matches the live node shape.
-**Actual:** Saved nodes include `junction: !!n.junction` and
-`degree: n.degree || 0` but `makeNode` never sets those fields.
-Always `false` / `0` in the save, and on load they're restored
-but unused.
-**Hypothesis:** Leftovers from an earlier node design. Remove
-from `serializeState` and `loadState`, or wire them up if the
-roundabout/t-junction code actually needs them (it currently
-doesn't — it rewrites topology by creating fresh nodes).
-**Impact:** Save blob is slightly larger than it needs to be.
-Minor — but if a future feature decides to use `junction`, saved
-cities will have stale `false` values that *look* correct.
+**Actual:** `serializeState` (v20 `game.js:237-262`) still emits
+`junction` / `degree` on every node. `makeNode` has never set
+them. Dead fields.
+**Hypothesis:** Drop from `serializeState` and `loadState`.
+**Impact:** Minor — save blob is slightly larger. Future-risk:
+if a feature ever decides `junction` means something, saved
+cities will restore stale `false` values that look correct.
 
-### [P3] `startGame` warmup skews first flow-rate reading
-**Status:** open
+### [P3] `startGame` warmup advances state.time by 4s
+**Status:** open — narrowed in v14 (warmup now skipped on Continue)
 **Found:** 2026-04-24, v13 `3777dda`
-**Repro:**
-1. Hard-refresh, tap Start, don't touch anything.
-2. Watch the `rate/min` HUD value for the first 10 seconds.
-**Expected:** Starts at 0, climbs as cars complete journeys.
-**Actual:** `startGame` seeds 4 cars per entry and runs
-`for (let i = 0; i < 80; i++) stepSim(0.05)` (`game.js:1651`) —
-instantly advances `state.time` by 4 seconds and potentially
-delivers several cars. First `delivered / state.time * 60`
-reading is reasonable, but the 4-second jump in `state.time`
-means the 60s flow-rate average is off until ~2 min of real
-play. Not a major bug, just a metric blemish.
-**Hypothesis:** Either don't count warmup toward `state.time`,
-or reset `state.time = 0` and `state.delivered = 0` after warmup
-in `startGame`.
-**Impact:** Purely a HUD metric accuracy issue.
+**Repro:** Fresh start, watch the `rate/min` HUD for the first
+10 seconds.
+**Actual:** Fresh starts still run
+`for (let i = 0; i < 80; i++) stepSim(0.05)` (v20 `game.js:1965`)
+and so `state.time` starts at 4. Flow rate's 60s average is
+off until ~2 min of real play.
+**Hypothesis:** Reset `state.time = 0` after warmup, or don't
+increment `state.time` during warmup steps.
+**Impact:** HUD-metric blemish only.
 
 ### [P3] Seeded queue entries have `waitingSince: 0`
-**Status:** open
+**Status:** open (unchanged)
 **Found:** 2026-04-24, v13 `3777dda`
-**Repro:** Read `startGame` (`game.js:1647-1650`). 16 seed cars
-get `waitingSince: 0`.
-**Expected:** Seed with `waitingSince: state.time`.
-**Actual:** If the "longest wait" metric ever ships, it will
-always read 4 seconds too high right after Start.
-**Hypothesis:** Cosmetic — fix when Issue "queue LIFO" is being
-fixed.
-**Impact:** Invisible until a wait-time HUD lands.
+**Actual:** Fresh start seeds 16 queue entries with
+`waitingSince: 0` (`game.js:1957-1959`). Invisible until a
+wait-time HUD ships; then they read 4s inflated.
+**Impact:** Invisible today.
 
-### [P3] Dead `endGame()` / `#gameover` UI still wired
-**Status:** open
+### [P3] Dead `endGame()` / `#gameover` UI still present
+**Status:** open (unchanged — `endGame` still dead, `#gameover`
+still in HTML)
 **Found:** 2026-04-24, v13 `3777dda`
-**Repro:** Inspect `game.js:1670-1676` and `index.html`.
-**Expected:** With the v5 removal of the game-over state, the
-splash and the `#gameover` / `#btn-retry` / `endGame()` nodes
-should be gone.
-**Actual:** `endGame()` is defined but never called — dead
-code. The `#btn-retry` button is wired to `restart()`, not
-`endGame()`. Harmless, but a dangling Retry button can surface
-if the markup changes or a future feature re-enables the popup.
-**Hypothesis:** Remove `endGame()`, confirm `index.html` no
-longer has `#gameover`. This is cleanup, not a bug — P4 if the
-user pushes back on triage.
-**Impact:** None until someone re-introduces a fail state and
-gets surprised by a pre-wired popup.
+**Actual:** `endGame()` defined at `game.js:2117-2123`, no
+callers. `#gameover` + `#btn-retry` still in `index.html:139-146`.
+`#btn-retry` wired to `restart()`, not `endGame()`.
+**Hypothesis:** Remove both.
+**Impact:** None in practice; cleanup.
 
 ### [P3] Erasing a road leaves its endpoint nodes behind
-**Status:** open
+**Status:** open (unchanged — same family as the undo node-orphan bugs)
 **Found:** 2026-04-24, v13 `3777dda`
-**Repro:**
-1. Drag a Road from the starter into empty space (creates dead-
-   end node N).
-2. Switch to Erase, tap the road.
-**Expected:** Node N is gone.
-**Actual:** `eraseEdgeById` (`game.js:664-678`) filters edges
-and cars but not nodes. N becomes an orphan the same way undo's
-orphan-node issue produces one.
-**Hypothesis:** Same fix family as the undo issue — tracking
-which nodes are safe to remove (no remaining incident edges, no
-building nodeId, not an entry).
-**Impact:** Phantom snap-points build up. Low severity —
-invisible, but affects snap behaviour.
+**Actual:** `eraseEdgeById` (v20 `game.js:746-760`) filters edges
++ cars, not nodes.
+**Impact:** Phantom snap-points build up.
+
+### [P3] Stale "Fuengirola" title + meta description
+**Status:** open, new this pass
+**Found:** 2026-04-24, noticed at v20 `abc9670`
+**Actual:** `index.html:9` reads `<title>Traffic Flow — Fuengirola</title>`
+and line 8 meta says "redesign the real Fuengirola interchange".
+The game has had no Fuengirola content since v3 (real OSM data
+moved to sibling project — see `NOTES.md` § Two sibling projects).
+**Hypothesis:** Retitle to `Traffic Flow` and rewrite the meta
+to describe the current pixel-sandbox game.
+**Impact:** Browser tab / share-preview misrepresents the game.
+
+### [P3] Splash blurb doesn't mention that Houses generate traffic
+**Status:** open, new this pass
+**Found:** 2026-04-24, first noticed at v20 (feature landed v16)
+**Actual:** `index.html:21` still says "Cars enter from the four
+edges (N / S / E / W) and drive across the city." Since v16,
+Houses *also* spawn cars — the whole point of them. Onboarding
+misses this.
+**Hypothesis:** Extend the blurb: "Houses you place generate
+their own traffic too — build a neighbourhood and watch it flow."
+**Impact:** New players won't understand why their mall queues
+grow when they add houses.
 
 ### [P4] Pressure ring ignores cars currently *at* the building
-**Status:** open
+**Status:** open (unchanged)
 **Found:** 2026-04-24, v13 `3777dda`
-**Repro:** Place a Mall, crank demand. Cars will park there for
-4 seconds each.
-**Expected:** The ring reflects total load — cars en route +
-cars currently parked — so a slow-to-drain Mall shows high
-pressure even when few new cars are inbound.
-**Actual:** `b.incoming` only counts cars whose `destKind ===
-'block'` and `!hasVisited` (`game.js:938-943`). Once parked,
-`hasVisited = true` so they stop counting. Ring drains the
-moment a car arrives, even though the car blocks the bay for
-the next ~4s.
-**Hypothesis:** Include `hasVisited && car.pauseUntil > state.time`
-cars. Or introduce a separate "docked" count and add both.
-**Impact:** Visual feedback understates how busy a Mall is —
-counter to the point of pressure rings.
+**Actual:** `b.incoming` only counts `destKind === 'block' &&
+!hasVisited`. Once a car is parked (`hasVisited = true`) it drops
+off the ring even though it blocks the bay for the dwell time.
+**Impact:** Ring understates true bay occupancy.
 
 ### [P4] Two Malls placed close together visually overlap
-**Status:** open
+**Status:** open (unchanged)
 **Found:** 2026-04-24, v13 `3777dda`
-**Repro:** Tap Mall tool, place two Malls on adjacent grid cells
-60px apart along the starter road.
-**Expected:** Placement is rejected or the second one snaps to a
-different node far enough away.
-**Actual:** `placeBlock` only rejects on identical `nodeId`
-collision. Mall visuals are 64×42px and the shadow is 1.5× size,
-so two Malls on different nodes 60px apart overlap substantially.
-**Hypothesis:** Either enforce a minimum spacing between
-buildings in world coords, or render Malls at scale proportional
-to actual node spacing.
-**Impact:** Aesthetic. Rare in practice because entries are far
-apart, but the flat-vector look breaks.
+**Actual:** `placeBlock` only rejects on identical `nodeId`.
+Mall visual is ≈64px wide — two Malls on nodes 60px apart
+overlap substantially.
+**Impact:** Aesthetic.
+
+### [P4] House spawn timers synchronise on reload
+**Status:** open, new in v16
+**Found:** 2026-04-24, v16 `2590590`
+**Repro:**
+1. Place 5+ Houses, let the game run until house-spawning has
+   desynced (few seconds).
+2. Refresh, click Continue.
+**Expected:** Houses continue spawning at their own phases.
+**Actual:** `serializeState` saves blocks with
+{id, type, x, y, nodeId, visits, dwell, size} — `timer` is not
+included (`game.js:255-259`). After load, every house has
+`b.timer = undefined` and the first tick sets `timer = dt`,
+meaning all houses reach `HOUSE_SPAWN_INTERVAL` at the same
+moment and fire in lockstep.
+**Hypothesis:** Persist `b.timer`, or seed it to
+`Math.random() * HOUSE_SPAWN_INTERVAL` on load.
+**Impact:** Brief synchronised burst of traffic ~5s after
+Continue. Noticeable with 10+ houses.
+
+### [P4] `bestScore` in memory only between "Start fresh" and first save
+**Status:** open, new in v18
+**Found:** 2026-04-24, v18 `8b0fddc`
+**Actual:** `Start fresh` calls `clearSavedCity()` (wipes
+localStorage). `buildLevel()` preserves `state.bestScore` in
+memory. First save action after restart writes it back. If the
+player hard-refreshes between the two, `bestScore` is gone.
+**Hypothesis:** Write `bestScore` to a separate localStorage key
+that survives `clearSavedCity`, or call `scheduleSave` + flush
+from the `btn-reset` handler.
+**Impact:** Tiny window, rare, but the "best" stat is a
+headline HUD element.
+
+### [P4] `srcBlockId` field on house-spawned cars is never read
+**Status:** open, new in v16
+**Found:** 2026-04-24, v16 `2590590`
+**Actual:** `tryDispatchFromHouse` sets `srcBlockId: house.id` on
+the car object (`game.js:929`). Grep confirms nothing reads it.
+Dead field.
+**Hypothesis:** Either delete, or use it so a house car returning
+via exit can be attributed to its origin (stat breakdowns,
+future features).
+**Impact:** Zero today.
 
 ## Resolved
 
-_(empty)_
+### [P1] Persistence is write-only — saved city is never restored
+**Status:** fixed-in-v14 (commit `21e3a5a`)
+**Found:** 2026-04-24, v13 `3777dda`
+**Fix:** `btn-start` handler now calls `loadState` if
+`hasSavedCity()`. Splash flips "Start" → "Continue" and reveals
+a "Start fresh" secondary button (`configureSplash`). RESEARCH.md
+#1 shipped.
+**Follow-ups:** Two adjacent issues moved to Open — *Corrupted
+save never self-clears* (P3) and *Save debounce drops last
+action on fast refresh* (P3).
+
+### [P2] `loadState` skips `state.started`, so post-load writes won't persist
+**Status:** effectively fixed in v14 (by call-site sequencing)
+**Found:** 2026-04-24, v13 `3777dda`
+**Fix path:** `loadState` itself still doesn't set
+`state.started`, but every caller (`btn-start`, `btn-reset`)
+invokes `startGame(...)` immediately after, and `startGame` sets
+`state.started = true`. The originally feared scenario ("save
+silently fails after Continue") is unreachable in the current
+code paths. Closing as resolved; if future code paths call
+`loadState` without `startGame`, reopen.
