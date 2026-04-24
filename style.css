@@ -109,11 +109,26 @@ html, body {
 
 .panel {
   position: absolute;
-  background: var(--panel);
+  background: linear-gradient(135deg,
+    rgba(255, 252, 245, 0.96) 0%,
+    rgba(248, 230, 214, 0.92) 60%,
+    rgba(244, 222, 218, 0.9) 100%);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
   border-radius: var(--r);
   box-shadow: var(--shadow);
   padding: 10px 14px;
+  position: absolute;
+  overflow: hidden;
+}
+/* Four-gate accent stripe: sage / dusty blue / peach / lavender — ties every
+   panel visually to the four entry gates in the world. */
+.panel::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(to right, #b8c9a8 0%, #a8b8cc 33%, #e8b89a 66%, #c8a8c8 100%);
+  pointer-events: none;
 }
 .panel.hidden { display: none; }
 
@@ -248,7 +263,19 @@ html, body {
   color: var(--ink);
   flex-shrink: 0;
 }
-.tool.active .tool-icon { color: white; }
+.tool.active .tool-icon { color: white !important; }
+
+/* Each tool gets a tinted icon so the toolbar has colour at rest,
+   matching the thing the tool produces in the world. */
+.tool[data-tool="road"]       .tool-icon { color: #4a5164; }
+.tool[data-tool="bridge"]     .tool-icon { color: #8a68b0; }
+.tool[data-tool="oneway"]     .tool-icon { color: #3a7ca5; }
+.tool[data-tool="roundabout"] .tool-icon { color: #5a8e68; }
+.tool[data-tool="house"]      .tool-icon { color: #b08545; }
+.tool[data-tool="shop"]       .tool-icon { color: #c74a3d; }
+.tool[data-tool="mall"]       .tool-icon { color: #4a73a5; }
+.tool[data-tool="erase"]      .tool-icon { color: #c24a3d; }
+#btn-undo                     .tool-icon { color: #6c7380; }
 .tool-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
 
 .toast {

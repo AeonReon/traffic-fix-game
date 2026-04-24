@@ -9,6 +9,20 @@ Running notes so we don't lose direction between sessions.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-24 — v20 (interface colour pass + point popups)** —
+  HUD, toolbar and splash panels got a warm peach-gradient background
+  and a four-gate accent stripe across the top (sage / blue / peach /
+  lavender — the gate colours). Toolbar icons now each carry their
+  own resting colour tied to what they make in the world: House gold,
+  Shop terracotta, Mall blue-grey, Bridge lavender, One-way blue,
+  Roundabout green, Erase red, Road slate. Active tool still turns
+  full orange so the selected state is obvious. Canvas bg replaced
+  with a subtle radial gradient (lighter centre, richer paper tone
+  at the edges). Decor gains flower patches alongside trees and grass
+  — five bright flower colours on soft green bases. Plus a gameplay-
+  juice addition: every scoring event now spawns a floating "+N"
+  popup (terracotta text with a cream shadow) that rises and fades —
+  makes every car's arrival feel rewarding.
 - **2026-04-24 — v19 (colour, properly)** — Cars are a cheerful
   pastel mix now (10 colours: coral / dusty blue / sage / amber /
   lavender / rose / deep blue / honey / olive / plum) instead of

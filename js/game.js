@@ -1092,8 +1092,10 @@
           if (block) {
             block.visits++;
             const spec = BUILDING_TYPES[block.type];
-            state.score += (spec && spec.points) || 1;
+            const pts = (spec && spec.points) || 1;
+            state.score += pts;
             state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'visit' });
+            state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'points', points: pts });
           }
           state.visits++;
           if (state.score > state.bestScore) state.bestScore = state.score;
@@ -1102,7 +1104,10 @@
           state.score += DELIVERY_POINTS;
           if (state.score > state.bestScore) state.bestScore = state.score;
           const exit = state.entries.find(ee => ee.id === car.sinkEntryId);
-          if (exit) state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'deliver' });
+          if (exit) {
+            state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'deliver' });
+            state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'points', points: DELIVERY_POINTS });
+          }
           toRemove.push(car);
         }
       }
@@ -1120,9 +1125,12 @@
       if (b) b.incoming++;
     }
 
-    // Age out visual effects.
+    // Age out visual effects — points popups live longer than bursts.
     if (state.effects.length) {
-      state.effects = state.effects.filter(fx => state.time - fx.startTime < 0.8);
+      state.effects = state.effects.filter(fx => {
+        const maxAge = fx.kind === 'points' ? 1.1 : 0.8;
+        return state.time - fx.startTime < maxAge;
+      });
     }
 
     // Jam meter: fills when any entry queue is too long.
@@ -1174,8 +1182,16 @@
   function render() {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#f4ead5';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Paper-warm radial gradient — lighter near centre, slightly richer at
+    // the corners. Gives the bg depth without competing with game elements.
+    const cw = canvas.width, ch = canvas.height;
+    const grad = ctx.createRadialGradient(cw / 2, ch / 2, 0,
+                                          cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
+    grad.addColorStop(0.0, '#faf0d9');
+    grad.addColorStop(0.55, '#f2e3c1');
+    grad.addColorStop(1.0, '#e8d6ae');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, cw, ch);
     ctx.scale(state.view.dpr, state.view.dpr);
 
     drawGrid();
@@ -1275,21 +1291,24 @@
     const rand = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
     for (let x = GRID; x < LOGICAL_W; x += GRID) {
       for (let y = GRID; y < LOGICAL_H; y += GRID) {
-        if (rand() > 0.12) continue;
-        const kind = rand() < 0.35 ? 'tree' : 'grass';
+        if (rand() > 0.14) continue;
+        const r = rand();
+        const kind = r < 0.32 ? 'tree' : r < 0.72 ? 'grass' : 'flower';
         state.decor.push({
           x: x + (rand() - 0.5) * 28,
           y: y + (rand() - 0.5) * 28,
           kind,
           size: 0.8 + rand() * 0.5,
-          tint: Math.floor(rand() * 4)
+          tint: Math.floor(rand() * 5)
         });
       }
     }
   }
 
-  const TREE_TINTS = ['#8ea87c', '#7f9c70', '#9ab386', '#889e76'];
-  const GRASS_TINTS = ['rgba(132,165,110,0.5)', 'rgba(118,155,95,0.5)', 'rgba(145,175,120,0.55)', 'rgba(108,145,90,0.5)'];
+  const TREE_TINTS  = ['#8ea87c', '#7f9c70', '#9ab386', '#889e76'];
+  const GRASS_TINTS = ['rgba(132,165,110,0.5)', 'rgba(118,155,95,0.5)',
+                       'rgba(145,175,120,0.55)', 'rgba(108,145,90,0.5)'];
+  const FLOWER_TINTS = ['#db6d51', '#e8a13a', '#c65893', '#6a9f4a', '#a065c3'];
 
   function drawDecor() {
     if (!state.decor) return;
@@ -1312,7 +1331,7 @@
         ctx.beginPath();
         ctx.arc(p.sx + 2 * s * d.size, p.sy + 2 * s * d.size, 5.5 * s * d.size, 0, Math.PI * 2);
         ctx.fill();
-      } else {
+      } else if (d.kind === 'grass') {
         // Grass tuft — three tiny dots in a cluster
         ctx.fillStyle = GRASS_TINTS[d.tint % GRASS_TINTS.length];
         const r = 1.8 * s * d.size;
@@ -1320,6 +1339,25 @@
         ctx.arc(p.sx,        p.sy,         r, 0, Math.PI * 2);
         ctx.arc(p.sx - 3 * s * d.size, p.sy + 1.5 * s * d.size, r, 0, Math.PI * 2);
         ctx.arc(p.sx + 3 * s * d.size, p.sy + 1.5 * s * d.size, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // Flower patch — bright centre petal with a soft green base
+        const r = 2.2 * s * d.size;
+        ctx.fillStyle = 'rgba(132, 165, 110, 0.4)';
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, r * 1.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = FLOWER_TINTS[d.tint % FLOWER_TINTS.length];
+        ctx.beginPath();
+        ctx.arc(p.sx,           p.sy,           r, 0, Math.PI * 2);
+        ctx.arc(p.sx - r * 1.3, p.sy,           r * 0.7, 0, Math.PI * 2);
+        ctx.arc(p.sx + r * 1.3, p.sy,           r * 0.7, 0, Math.PI * 2);
+        ctx.arc(p.sx,           p.sy - r * 1.3, r * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+        // Tiny yellow centre dot on the main flower
+        ctx.fillStyle = 'rgba(250, 220, 120, 0.9)';
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, r * 0.35, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -1631,18 +1669,37 @@
   }
 
   function drawEffects() {
-    const LIFE = 0.8;
     for (const fx of state.effects) {
       const age = state.time - fx.startTime;
       if (age < 0) continue;
+
+      if (fx.kind === 'points') {
+        // Floating "+N" that rises and fades.
+        const LIFE = 1.1;
+        const t = Math.min(1, age / LIFE);
+        const p = w2s(fx.x, fx.y);
+        const rise = (10 + t * 36) * state.view.scale;
+        // Soft shadow for legibility on busy backgrounds
+        ctx.font = `bold ${Math.max(13, 18 * state.view.scale)}px -apple-system, "SF Pro Rounded", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const alpha = 1 - Math.pow(t, 1.8);
+        ctx.fillStyle = `rgba(255, 250, 238, ${alpha * 0.85})`;
+        ctx.fillText('+' + fx.points, p.sx + 1, p.sy - rise + 1);
+        ctx.fillStyle = `rgba(219, 109, 81, ${alpha})`;
+        ctx.fillText('+' + fx.points, p.sx, p.sy - rise);
+        continue;
+      }
+
+      // Expanding ring (visit / deliver).
+      const LIFE = 0.8;
       const t = Math.min(1, age / LIFE);
       const p = w2s(fx.x, fx.y);
-      // Ring expands outward, fades.
       const r = (12 + t * 32) * state.view.scale;
       const alpha = (1 - t) * 0.6;
       ctx.strokeStyle = fx.kind === 'deliver'
-        ? `rgba(219, 109, 81, ${alpha})`   // warm orange for exit deliveries
-        : `rgba(79, 161, 106, ${alpha})`;  // calm green for block visits
+        ? `rgba(219, 109, 81, ${alpha})`
+        : `rgba(79, 161, 106, ${alpha})`;
       ctx.lineWidth = Math.max(2, 2.5 * state.view.scale * (1 - t * 0.5));
       ctx.beginPath();
       ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
