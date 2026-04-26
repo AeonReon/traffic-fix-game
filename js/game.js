@@ -103,7 +103,7 @@
 
   // Build version — bumped on every ship; shown in the corner pill so the
   // user can see at a glance whether the page reloaded with a new build.
-  const VERSION = 'v31';
+  const VERSION = 'v32';
 
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
@@ -558,6 +558,36 @@
     };
   }
 
+  // Visual offset for buildings — they sit BESIDE a road, not on it. Cars
+  // still route to the road point (block.nodeId is on the road), but the
+  // building is drawn one grid step perpendicular to the road, on
+  // whichever side the player tapped.
+  //
+  // If road direction is known (from the edge geometry or a connected
+  // edge at a node), the offset is taken perpendicular to that direction
+  // — clean for axis-aligned roads. Falls back to "direction from road
+  // point to tap" when no road direction is available.
+  function offsetVisualFromRoad(roadX, roadY, tapX, tapY, roadDirX, roadDirY) {
+    if (typeof roadDirX === 'number' && typeof roadDirY === 'number'
+        && (roadDirX !== 0 || roadDirY !== 0)) {
+      const L = Math.hypot(roadDirX, roadDirY) || 1;
+      const dirX = roadDirX / L, dirY = roadDirY / L;
+      // Perpendicular (rotate 90°). Sign is decided by which side of the
+      // road the player's tap landed on.
+      const px = -dirY, py = dirX;
+      const dot = (tapX - roadX) * px + (tapY - roadY) * py;
+      const sign = dot >= 0 ? 1 : -1;
+      return snapToGrid(roadX + px * sign * GRID, roadY + py * sign * GRID);
+    }
+    // Tap-direction fallback (no road direction known).
+    let dx = tapX - roadX;
+    let dy = tapY - roadY;
+    const L = Math.hypot(dx, dy);
+    if (L < 1) { dx = 0; dy = -1; }
+    else { dx /= L; dy /= L; }
+    return snapToGrid(roadX + dx * GRID, roadY + dy * GRID);
+  }
+
   // Snap a drag end point to a strict horizontal or vertical line on the
   // grid. v29 dropped the 45° diagonal escape hatch — it was the source of
   // most of the "wonky" feel because a slightly diagonal drag would commit
@@ -789,8 +819,12 @@
     return { ok: true, cost };
   }
 
-  // Place a building. `type` is one of BUILDING_TYPES keys.
-  function placeBlock(wx, wy, type = 'shop') {
+  // Place a building. `type` is one of BUILDING_TYPES keys. `opts.visualPos`
+  // optionally separates the BUILDING'S DRAWN POSITION from its routing node:
+  // the node sits on the road (so cars can reach it) and the building art
+  // sits one grid step beside the road. This is what makes the city look
+  // like a real one — roads run BY the houses, not THROUGH them.
+  function placeBlock(wx, wy, type = 'shop', opts = {}) {
     const spec = BUILDING_TYPES[type] || BUILDING_TYPES.shop;
 
     // Game mode — check funds first so we don't mutate the network only to
@@ -832,11 +866,16 @@
     if (node.entry) return { ok: false, reason: 'Can\'t place on a gate' };
     if (blockedNodeIds.has(node.id)) return { ok: false, reason: 'Building already here' };
 
-    // Visual / footprint check — keep buildings at exactly one grid-step
-    // apart minimum, so plots tile cleanly without overlapping.
+    // Visual position — beside the road, not on it. Falls back to node
+    // coords if no opts.visualPos was given (parks, sandbox-mode old paths).
+    const visualX = opts.visualPos ? opts.visualPos.x : node.x;
+    const visualY = opts.visualPos ? opts.visualPos.y : node.y;
+
+    // Visual / footprint check — minimum spacing measured against drawn
+    // positions so two houses on opposite sides of one road don't collide.
     const MIN_BLOCK_DIST = GRID - 4;   // 56 — adjacent grid cells (60 apart) pass
     for (const b of state.blocks) {
-      if (Math.hypot(b.x - node.x, b.y - node.y) < MIN_BLOCK_DIST) {
+      if (Math.hypot(b.x - visualX, b.y - visualY) < MIN_BLOCK_DIST) {
         return { ok: false, reason: 'Too close to another building' };
       }
     }
@@ -844,7 +883,7 @@
     const block = {
       id: state.nextBlockId++,
       type,
-      x: node.x, y: node.y,
+      x: visualX, y: visualY,
       nodeId: node.id,
       visits: 0,
       dwell: spec.dwell,
@@ -3009,24 +3048,47 @@
 
     if (isTap && (state.tool === 'house' || state.tool === 'shop' || state.tool === 'mall' || state.tool === 'park')) {
       const world = s2w(p.startX, p.startY);
-      // v31 — road-first placement so non-park buildings always land on a
-      // road, intuitively. Search wider (1 grid step) than the placeBlock
-      // internal snap radius so a tap up to ~60 world units from a road
-      // still snaps onto it. Only parks fall through to a clean grid-snap
-      // (since they're decorative and don't need road access).
+      // v32 — road runs BY the building, not through it. The building's
+      // routing node is anchored on the road; its drawn position is one
+      // grid step perpendicular, on whichever side the player tapped.
       const blockedIds = new Set(state.blocks.map(b => b.nodeId));
       const nodeNear = findNearestNode(world.x, world.y, GRID);
       const usableNode = (nodeNear && !blockedIds.has(nodeNear.id) && !nodeNear.entry) ? nodeNear : null;
       const edgeNear = !usableNode ? findNearestEdgePoint(world.x, world.y, GRID) : null;
-      let pt;
-      if (usableNode) pt = { x: usableNode.x, y: usableNode.y };
-      // For edge snaps, grid-align the point so buildings on a road still
-      // sit on grid intersections. Axis-aligned roads have grid intersections
-      // along their length so this works cleanly.
-      else if (edgeNear) pt = snapToGrid(edgeNear.x, edgeNear.y);
-      else if (state.tool === 'park') pt = snapToGrid(world.x, world.y);
-      else return toast('Place on or next to a road');
-      const res = placeBlock(pt.x, pt.y, state.tool);
+
+      // Park is decorative — it doesn't need a road. Keep the legacy
+      // grid-snap-on-tap behaviour for it.
+      if (state.tool === 'park') {
+        const pt = snapToGrid(world.x, world.y);
+        const res = placeBlock(pt.x, pt.y, 'park');
+        if (!res.ok) return toast(res.reason);
+        toast(res.usedCivicCredit ? 'Free Park placed (civic credit)' : 'Park placed');
+        return;
+      }
+
+      let roadX, roadY, roadDirX, roadDirY;
+      if (usableNode) {
+        roadX = usableNode.x; roadY = usableNode.y;
+        // Take road direction from any edge attached to this node so the
+        // offset is perpendicular to a real road, not just the tap vector.
+        const out = state.adjacency.get(usableNode.id);
+        if (out && out.length) {
+          const e = out[0];
+          roadDirX = e.shape[e.shape.length - 1].x - e.shape[0].x;
+          roadDirY = e.shape[e.shape.length - 1].y - e.shape[0].y;
+        }
+      } else if (edgeNear) {
+        const g = snapToGrid(edgeNear.x, edgeNear.y);
+        roadX = g.x; roadY = g.y;
+        const e = edgeNear.edge;
+        roadDirX = e.shape[e.shape.length - 1].x - e.shape[0].x;
+        roadDirY = e.shape[e.shape.length - 1].y - e.shape[0].y;
+      } else {
+        return toast('Place on or next to a road');
+      }
+
+      const visual = offsetVisualFromRoad(roadX, roadY, world.x, world.y, roadDirX, roadDirY);
+      const res = placeBlock(roadX, roadY, state.tool, { visualPos: visual });
       if (!res.ok) return toast(res.reason);
       const label = BUILDING_TYPES[state.tool].label;
       if (res.usedCivicCredit) toast(`Free ${label} placed (civic credit)`);

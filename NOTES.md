@@ -101,6 +101,22 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-26 — v32 (buildings beside roads, not on them)** — Buildings
+  now sit BESIDE the road, the way real city blocks do. The drawn
+  position of a house / shop / mall is one grid step perpendicular to
+  the road, on whichever side the player tapped. Cars still route
+  perfectly — the routing node (`block.nodeId`) stays anchored on the
+  road, so a car drives to the road point in front of the building
+  and "parks" there for the dwell time. The result reads as cars
+  parking on the curb in front of houses. New `offsetVisualFromRoad`
+  helper does the perpendicular geometry; for axis-aligned roads it
+  picks the perpendicular axis cleanly so the visual lands directly
+  above / below / left / right of the road point. Falls back to the
+  tap vector when no road direction is known. `placeBlock` now takes
+  an `opts.visualPos` so legacy / park placements keep their
+  on-the-spot rendering (parks are decorative, no road needed).
+  MIN_BLOCK_DIST measured against drawn positions so two houses on
+  opposite sides of a road don't fight each other for spacing.
 - **2026-04-26 — v31 (city-driven traffic + road-required placement + bigger gardens)** —
   Three big changes that make the economic loop click. **Edge-gate
   spawn rate is now driven by destinations** — with no shops or malls,
