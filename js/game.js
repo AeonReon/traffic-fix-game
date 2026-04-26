@@ -103,7 +103,7 @@
 
   // Build version — bumped on every ship; shown in the corner pill so the
   // user can see at a glance whether the page reloaded with a new build.
-  const VERSION = 'v29';
+  const VERSION = 'v30';
 
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
@@ -923,43 +923,53 @@
       return { dx: dx / L, dy: dy / L };
     }
 
-    // Group by bearing (a pair of twin edges shares the same direction).
-    const BUCKET = 0.35;
-    const groups = [];
+    // v30 — always create EIGHT ring nodes at fixed bearings (cardinal +
+    // ordinal: E / NE / N / NW / W / SW / S / SE). The original implementation
+    // only created one node per approach, which meant adding a fifth approach
+    // later required rebuilding the roundabout. Eight fixed nodes means new
+    // diagonal connections can land on a ring node directly. The "missing"
+    // four nodes for a 4-way junction sit there as visible attachment
+    // points.
+    const FIXED_BEARINGS = [];
+    for (let i = 0; i < 8; i++) {
+      // -π .. π in 8 steps (45° each). atan2's range matches.
+      FIXED_BEARINGS.push(-Math.PI + (i * Math.PI / 4));
+    }
+    const ringNodes = FIXED_BEARINGS.map(bearing => ({
+      node: makeNode(node.x + radius * Math.cos(bearing), node.y + radius * Math.sin(bearing)),
+      bearing
+    }));
+
+    // Rewire each approach to the ring node closest to its bearing. With
+    // axis-aligned roads, every approach is exactly 0/90/180/270 and maps
+    // perfectly onto a ring node — no kink. Diagonal approaches map to the
+    // nearest 45° ring node within ≤22.5°.
+    function bestRingFor(approachBearing) {
+      let best = ringNodes[0];
+      let bestDiff = Math.abs(angleDiff(best.bearing, approachBearing));
+      for (let i = 1; i < ringNodes.length; i++) {
+        const d = Math.abs(angleDiff(ringNodes[i].bearing, approachBearing));
+        if (d < bestDiff) { best = ringNodes[i]; bestDiff = d; }
+      }
+      return best;
+    }
     for (const e of touching) {
       const d = dirAway(e);
       const bearing = Math.atan2(d.dy, d.dx);
-      let g = groups.find(g => Math.abs(angleDiff(g.bearing, bearing)) < BUCKET);
-      if (!g) { g = { bearing, dx: d.dx, dy: d.dy, edges: [] }; groups.push(g); }
-      g.edges.push(e);
-    }
-    if (groups.length < 3) return { ok: false, reason: 'approaches too close together' };
-
-    // Create one ring node per approach direction.
-    const ringNodes = groups.map(g => {
-      const rx = node.x + radius * g.dx;
-      const ry = node.y + radius * g.dy;
-      const rn = makeNode(rx, ry);
-      return { node: rn, bearing: g.bearing, edges: g.edges };
-    });
-
-    // Rewire the approach edges so they end at the ring node instead of the centre.
-    for (const rn of ringNodes) {
-      for (const e of rn.edges) {
-        if (e.from === nodeId) {
-          e.from = rn.node.id;
-          e.shape[0] = { x: rn.node.x, y: rn.node.y };
-        } else {
-          e.to = rn.node.id;
-          e.shape[e.shape.length - 1] = { x: rn.node.x, y: rn.node.y };
-        }
-        e.length = polyLen(e.shape);
+      const target = bestRingFor(bearing);
+      if (e.from === nodeId) {
+        e.from = target.node.id;
+        e.shape[0] = { x: target.node.x, y: target.node.y };
+      } else {
+        e.to = target.node.id;
+        e.shape[e.shape.length - 1] = { x: target.node.x, y: target.node.y };
       }
+      e.length = polyLen(e.shape);
     }
 
-    // Counterclockwise on a y-down screen = descending bearing order.
+    // Build the ring as 8 one-way arcs counterclockwise (no reverse twins —
+    // that's what enforces single-direction roundabout flow).
     ringNodes.sort((a, b) => b.bearing - a.bearing);
-
     for (let i = 0; i < ringNodes.length; i++) {
       const a = ringNodes[i].node;
       const b = ringNodes[(i + 1) % ringNodes.length].node;
@@ -969,14 +979,13 @@
       if (delta <= -Math.PI) delta += 2 * Math.PI;
       else if (delta > Math.PI) delta -= 2 * Math.PI;
       if (delta < 0) delta += 2 * Math.PI;
-      const steps = 6;
+      const steps = 4;
       const shape = [];
       for (let s = 0; s <= steps; s++) {
         const t = s / steps;
         const ang = angA + delta * t;
         shape.push({ x: node.x + radius * Math.cos(ang), y: node.y + radius * Math.sin(ang) });
       }
-      // One-way arc (no reverse twin — that's what makes it a roundabout).
       state.edges.push({
         id: state.nextEdgeId++,
         from: a.id, to: b.id,
@@ -1646,25 +1655,72 @@
   }
 
   function drawRoads() {
-    // Dedupe to one render per pair.
+    const scale = state.view.scale;
+
+    // Pass 1 — non-bridge roads first (regular asphalt). Drawn underneath so
+    // bridges layer on top and clearly read as "above".
     for (const e of state.edges) {
       if (e.id % 2 === 0) continue;
-      const w = (e.bridge ? 20 : 22) * state.view.scale;
-      drawPolyline(e.shape, w + 4 * state.view.scale, e.bridge ? 'rgba(30,35,50,0.25)' : '#1b1f2b');
+      if (e.bridge) continue;
+      drawPolyline(e.shape, 26 * scale, '#1b1f2b');
     }
     for (const e of state.edges) {
       if (e.id % 2 === 0) continue;
-      const w = (e.bridge ? 20 : 22) * state.view.scale;
-      drawPolyline(e.shape, w, e.bridge ? '#4a5164' : '#2d3242');
+      if (e.bridge) continue;
+      drawPolyline(e.shape, 22 * scale, '#2d3242');
     }
-    // Dashed centre stripe — only on two-way roads (with a reverse twin).
+
+    // Pass 2 — bridges, distinct warm stone colour with drop shadow + side
+    // rails so they're unmistakable against the dark road surface. The user
+    // explicitly asked for bridges to look like bridges, not roads.
+    for (const e of state.edges) {
+      if (e.id % 2 === 0) continue;
+      if (!e.bridge) continue;
+      // Drop shadow — slight offset down/right gives the elevated feel.
+      ctx.save();
+      ctx.translate(2 * scale, 4 * scale);
+      drawPolyline(e.shape, 30 * scale, 'rgba(30, 35, 50, 0.35)');
+      ctx.restore();
+      // Outer wood/stone frame
+      drawPolyline(e.shape, 28 * scale, '#7a5a32');
+      // Side rails — render the full width slightly darker, then the centre
+      // stone surface narrower on top, leaving 2px of rail showing on each
+      // side. Cheap pseudo-railing without computing perpendiculars.
+      drawPolyline(e.shape, 24 * scale, '#a47a44');
+      drawPolyline(e.shape, 18 * scale, '#e0c79a');
+      // Plank stripes — short perpendicular dashes evenly along the bridge
+      // give an unmistakable "bridge" read at a glance.
+      ctx.save();
+      ctx.strokeStyle = 'rgba(122, 90, 50, 0.55)';
+      ctx.lineCap = 'butt';
+      ctx.lineWidth = Math.max(1, 1.4 * scale);
+      const plankSpacing = 14;  // world units between planks
+      const plankCount = Math.max(2, Math.floor(e.length / plankSpacing));
+      for (let i = 0; i < plankCount; i++) {
+        const d = (e.length / plankCount) * (i + 0.5);
+        const sp = sampleEdge(e, d);
+        // perpendicular vector (px, py)
+        const px = -sp.hy, py = sp.hx;
+        const half = 9 * scale;
+        const a = w2s(sp.x - px * half / scale, sp.y - py * half / scale);
+        const b = w2s(sp.x + px * half / scale, sp.y + py * half / scale);
+        ctx.beginPath();
+        ctx.moveTo(a.sx, a.sy);
+        ctx.lineTo(b.sx, b.sy);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Dashed centre stripe — only on two-way non-bridge roads.
     ctx.save();
-    ctx.setLineDash([10 * state.view.scale, 12 * state.view.scale]);
+    ctx.setLineDash([10 * scale, 12 * scale]);
     ctx.lineCap = 'butt';
     ctx.strokeStyle = 'rgba(255, 239, 210, 0.7)';
-    ctx.lineWidth = Math.max(1, 1.2 * state.view.scale);
+    ctx.lineWidth = Math.max(1, 1.2 * scale);
     for (const e of state.edges) {
       if (e.id % 2 === 0) continue;
+      if (e.bridge) continue;
       if (edgeIsOneWay(e)) continue;
       drawPolyline(e.shape, 0, null, true);
     }
@@ -2771,9 +2827,34 @@
     const world = s2w(mx, my);
     if (state.dragging) {
       state.dragging.cursorWorld = world;
+      // Prefer axis-aligned snap candidates so a drag from one row to a
+      // parallel row produces a clean perpendicular line, not a slight
+      // diagonal that snaps to wherever the cursor lands on the second
+      // road. We project the cursor onto the start's row or column
+      // (whichever matches the dominant axis) and look for snaps THERE
+      // first. If nothing's at the aligned position, fall back to a
+      // search at the raw cursor position — that's how diagonal
+      // connections to roundabout ring nodes still work.
       const sn = snapRadii();
-      const nodeSnap = findNearestNode(world.x, world.y, sn.node);
-      const edgeSnap = !nodeSnap ? findNearestEdgePoint(world.x, world.y, sn.edge) : null;
+      const startA = state.dragging.snapStart
+        ? { x: state.dragging.snapStart.x, y: state.dragging.snapStart.y }
+        : state.dragging.snapStartEdge
+          ? { x: state.dragging.snapStartEdge.x, y: state.dragging.snapStartEdge.y }
+          : null;
+      let aligned = world;
+      if (startA) {
+        const adx = Math.abs(world.x - startA.x);
+        const ady = Math.abs(world.y - startA.y);
+        aligned = adx >= ady
+          ? { x: world.x, y: startA.y }
+          : { x: startA.x, y: world.y };
+      }
+      let nodeSnap = findNearestNode(aligned.x, aligned.y, sn.node);
+      let edgeSnap = !nodeSnap ? findNearestEdgePoint(aligned.x, aligned.y, sn.edge) : null;
+      if (!nodeSnap && !edgeSnap) {
+        nodeSnap = findNearestNode(world.x, world.y, sn.node);
+        edgeSnap = !nodeSnap ? findNearestEdgePoint(world.x, world.y, sn.edge) : null;
+      }
       state.dragging.snapEnd = nodeSnap;
       state.dragging.snapEndEdge = edgeSnap;
     } else if (state.panActive && p) {

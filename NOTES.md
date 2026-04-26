@@ -101,6 +101,24 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-26 — v30 (axis-aligned snaps + 8-way roundabouts + proper bridges)** —
+  Three v29 follow-ups. **Axis-aligned end snapping** — when you drag from
+  one row to a parallel row, the end-snap candidate search now happens
+  at the *axis-aligned target* first (cursor projected onto the start's
+  row or column), so the line goes perfectly perpendicular instead of
+  bending to wherever the cursor landed on the second road. Falls back
+  to the raw cursor position only if nothing's at the aligned target,
+  which is exactly when diagonal connections (like to a roundabout
+  ring node) make sense. **Roundabouts always have 8 ring nodes** now
+  — N / NE / E / SE / S / SW / W / NW — so you can drag a fifth
+  approach in at a diagonal to one of the four "spare" corners. Cardinal
+  approaches still align perfectly because their bearing maps exactly
+  to a ring node. **Bridges look like bridges** — warm cream stone surface
+  (#e0c79a) with a darker wood frame (#a47a44/#7a5a32) and short
+  perpendicular plank stripes every 14 units along their length. A drop
+  shadow underneath sells the "elevated" read. Drawn in a separate pass
+  AFTER all regular roads so they always layer on top, no matter the
+  edge id order.
 - **2026-04-26 — v29 (grid pass + Parks/civic credits + toolbar hide)** —
   Big aesthetic / playability pass. **Roads are strictly axis-aligned**
   now — the 45° diagonal escape hatch is gone, every drag commits to
