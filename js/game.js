@@ -86,11 +86,21 @@
   };
   const DELIVERY_POINTS = 1;   // car reaches an exit gate
 
+  // Build version — bumped on every ship; shown in the corner pill so the
+  // user can see at a glance whether the page reloaded with a new build.
+  const VERSION = 'v27';
+
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
   const SAVE_KEY_SANDBOX = 'traffic-flow:v1';
   const SAVE_KEY_GAME = 'traffic-flow:game:v1';
   const SAVE_VERSION = 1;
+
+  // Slow ramp — in any mode, demand starts low and ramps up to full over
+  // RAMP_TIME seconds so the city has time to breathe before things get hot.
+  // Without this, all four gates flood at once and jam the moment you start.
+  const RAMP_TIME = 90;
+  const RAMP_START = 0.25;
 
   // ================================================================
   // Modes & economy (Game Mode only — Sandbox ignores all of this)
@@ -124,6 +134,37 @@
   // Crash / overload — game mode only. Sustained near-max jam ends the run.
   const OVERLOAD_JAM = 0.95;
   const OVERLOAD_TIME = 30;       // seconds at >= OVERLOAD_JAM
+
+  // Game-mode targets (M2 from research/make-it-a-game.md). Visible in the
+  // HUD as 3 pills; soft goals — no fail if you miss them. Each one fires a
+  // toast and a permanent ✓ when hit. Order is from easy → spicy.
+  const TARGET_DEFS = [
+    {
+      id: 'earn500',
+      icon: '💰',
+      label: 'Earn $500',
+      goal: 500,
+      progress: (s) => Math.min(500, s.totalEarned),
+      format: (v) => `$${Math.round(v)} / $500`
+    },
+    {
+      id: 'people30',
+      icon: '🏘️',
+      label: 'House 30 people',
+      goal: 30,
+      progress: (s) => Math.min(30, s.blocks.reduce((n, b) => n + (b.type === 'house' ? 2 : 0), 0)),
+      format: (v) => `${Math.round(v)} / 30`
+    },
+    {
+      id: 'income60s',
+      icon: '🚀',
+      label: 'Sustain $30/min for 60s',
+      goal: 60,
+      progress: (s) => Math.min(60, s._incomeSustainSec || 0),
+      format: (v) => `${Math.round(v)} / 60s`
+    }
+  ];
+  const INCOME_SUSTAIN_THRESHOLD = 30;  // $/min
 
   function gridSteps(lenPx) {
     return Math.max(1, Math.round(lenPx / GRID));
@@ -183,6 +224,13 @@
     overloadTimer: 0,       // seconds spent above OVERLOAD_JAM
     bestMoney: 0,
     bestSurvived: 0,        // longest survived run, seconds
+
+    // Targets (M2). Persisted; once hit, stays hit for the run.
+    targetsHit: {},         // { earn500: true, ... }
+    earnSamples: [],        // last 60 numbers ($/sec for that sim-second)
+    earnLastSampleAt: -1,
+    earnLastTotal: 0,
+    _incomeSustainSec: 0,   // continuous seconds at >= threshold income/min
 
     // Camera / view fitted to LOGICAL coords
     view: { scale: 1, originX: LOGICAL_W / 2, originY: LOGICAL_H / 2, dpr: window.devicePixelRatio || 1 },
@@ -363,7 +411,9 @@
       peakPeople: state.peakPeople,
       bestMoney: state.bestMoney,
       bestSurvived: state.bestSurvived,
-      runTime: state.time
+      runTime: state.time,
+      targetsHit: state.targetsHit,
+      earnSamples: state.earnSamples
     };
   }
 
@@ -398,6 +448,11 @@
       state.peakPeople = data.peakPeople || 0;
       state.bestMoney = data.bestMoney || 0;
       state.bestSurvived = data.bestSurvived || 0;
+      state.targetsHit = data.targetsHit || {};
+      state.earnSamples = Array.isArray(data.earnSamples) ? data.earnSamples.slice(-60) : [];
+      state.earnLastSampleAt = -1;
+      state.earnLastTotal = state.totalEarned;
+      state._incomeSustainSec = 0;
       rebuildAdjacency();
       return true;
     } catch (err) {
@@ -949,7 +1004,16 @@
   function currentSpawnInterval() {
     const m = state.demandMult;
     if (m < 0.02) return Infinity;  // paused
-    return BASE_SPAWN_INTERVAL / m;
+    // Slow ramp: from RAMP_START × m at t=0 up to 1 × m at RAMP_TIME.
+    const ramp = Math.min(1, RAMP_START + (1 - RAMP_START) * (state.time / RAMP_TIME));
+    return BASE_SPAWN_INTERVAL / (m * ramp);
+  }
+
+  // A gate's queue should only fill when it has at least one outgoing road.
+  // Otherwise four disconnected gates flood at start with nowhere to go.
+  function gateHasNetwork(entry) {
+    const out = state.adjacency.get(entry.nodeId);
+    return !!(out && out.length);
   }
 
   // Category weights matching RESEARCH.md Stage A.1 — cars from an edge
@@ -1112,11 +1176,16 @@
     const interval = currentSpawnInterval();
     for (const e of state.entries) {
       e.timer = (e.timer || 0) + dt;
+      const connected = gateHasNetwork(e);
       while (e.timer >= interval) {
         e.timer -= interval;
-        if (e.queue.length < 12) e.queue.push({ waitingSince: state.time });
+        // Only enqueue if the gate is actually connected to a road. Otherwise
+        // an isolated N/S gate at start would queue cars instantly that have
+        // nowhere to go, jam the meter, and crash the city before the player
+        // does anything.
+        if (connected && e.queue.length < 12) e.queue.push({ waitingSince: state.time });
       }
-      tryDispatchFromQueue(e);
+      if (connected) tryDispatchFromQueue(e);
     }
 
     // Houses generate internal traffic to Shops / Malls / exits.
@@ -1282,6 +1351,34 @@
       if (c.destKind !== 'block' || c.hasVisited) continue;
       const b = state.blocks.find(x => x.id === c.blockId);
       if (b) b.incoming++;
+    }
+
+    // Sample the per-sim-second earnings ($) so we can compute a rolling
+    // $/min for the income-sustain target. Uses the same per-second cadence
+    // as the flow sampler.
+    if (isGameMode()) {
+      if (state.earnLastSampleAt < 0) {
+        state.earnLastSampleAt = state.time;
+        state.earnLastTotal = state.totalEarned;
+      } else if (state.time - state.earnLastSampleAt >= 1) {
+        const delta = state.totalEarned - state.earnLastTotal;
+        state.earnSamples.push(delta);
+        if (state.earnSamples.length > 60) state.earnSamples.shift();
+        state.earnLastSampleAt = state.time;
+        state.earnLastTotal = state.totalEarned;
+      }
+      // Rolling income/min — sum of the windowed per-sec samples.
+      const incomePerMin = state.earnSamples.reduce((a, b) => a + b, 0)
+        * (60 / Math.max(1, state.earnSamples.length));
+      if (incomePerMin >= INCOME_SUSTAIN_THRESHOLD) {
+        state._incomeSustainSec += dt;
+      } else {
+        // Reset on drop — "sustain" means continuous. Soft 2× drain instead
+        // of instant zero so a single dip doesn't punish.
+        state._incomeSustainSec = Math.max(0, state._incomeSustainSec - dt * 2);
+      }
+      // Target-hit detection — cheap, runs every step but reads small data.
+      checkTargets();
     }
 
     // Sample the delivery-per-minute rate once per sim-second for the
@@ -2554,6 +2651,11 @@
     state.money = STARTING_MONEY;
     state.totalEarned = 0;
     state.peakPeople = 0;
+    state.targetsHit = {};
+    state.earnSamples = [];
+    state.earnLastSampleAt = -1;
+    state.earnLastTotal = 0;
+    state._incomeSustainSec = 0;
 
     for (const ep of LEVEL.entries) {
       const node = makeNode(ep.x, ep.y, { entry: ep.id });
@@ -2579,6 +2681,57 @@
       el.classList.toggle('hidden', !game);
     });
     refreshToolCosts();
+  }
+
+  // Target progress + hit detection. Cheap; called from stepSim each tick
+  // when in game mode. Toast + score burst on the first hit of each one.
+  function checkTargets() {
+    for (const def of TARGET_DEFS) {
+      if (state.targetsHit[def.id]) continue;
+      const v = def.progress(state);
+      if (v >= def.goal) {
+        state.targetsHit[def.id] = true;
+        toast(`✓ ${def.label}`, 2600);
+        // Bonus money + a fanfare burst near the HUD origin.
+        state.money += 100;
+        state.totalEarned += 100;
+        // Spawn a series of sparkle bursts at the screen-centre to draw the
+        // eye to the toast. Anchored in screen coords via render side.
+        for (let i = 0; i < 6; i++) {
+          state.effects.push({
+            x: LOGICAL_W / 2 + (Math.random() - 0.5) * 200,
+            y: LOGICAL_H / 2 + (Math.random() - 0.5) * 200,
+            startTime: state.time + i * 0.05,
+            kind: 'deliver'
+          });
+        }
+        Audio.chime('mall');
+        scheduleSave();
+      }
+    }
+  }
+
+  // Re-render the targets panel from current state. Cheap (3 DOM writes).
+  function renderTargets() {
+    const panel = document.getElementById('targets');
+    if (!panel) return;
+    if (!isGameMode()) {
+      panel.classList.add('hidden');
+      return;
+    }
+    panel.classList.remove('hidden');
+    for (const def of TARGET_DEFS) {
+      const row = panel.querySelector(`[data-target="${def.id}"]`);
+      if (!row) continue;
+      const v = def.progress(state);
+      const pct = Math.min(100, (v / def.goal) * 100);
+      const fill = row.querySelector('.target-fill');
+      const txt = row.querySelector('.target-progress');
+      if (fill) fill.style.width = pct.toFixed(0) + '%';
+      if (txt) txt.textContent = def.format(v);
+      const hit = !!state.targetsHit[def.id];
+      row.classList.toggle('hit', hit);
+    }
   }
 
   function refreshToolCosts() {
@@ -2635,9 +2788,13 @@
       if (vEl) vEl.textContent = (state.demandMult || 1).toFixed(1) + '×';
     }
     // Seed only on a fresh start — a loaded city already has infrastructure.
+    // Only seed gates that have network connections; otherwise disconnected
+    // gates pile up queued cars instantly with nowhere to go.
     if (opts.fresh !== false) {
       for (let i = 0; i < 4; i++) {
-        for (const e of state.entries) e.queue.push({ waitingSince: 0 });
+        for (const e of state.entries) {
+          if (gateHasNetwork(e)) e.queue.push({ waitingSince: 0 });
+        }
       }
       for (let i = 0; i < 80; i++) stepSim(0.05);
     }
@@ -2659,6 +2816,7 @@
     state.paused = true;
     document.getElementById('hud').classList.add('hidden');
     document.getElementById('toolbar').classList.add('hidden');
+    document.getElementById('targets')?.classList.add('hidden');
     document.getElementById('gameover').classList.add('hidden');
     document.getElementById('paused-overlay').classList.remove('show');
     configureSplash();
@@ -2814,6 +2972,7 @@
       : 0;
     document.getElementById('m-flow').innerHTML = `${Math.round(ratePerMin)}<span class="u">/min</span>`;
     drawFlowSpark();
+    renderTargets();
     // Jam fill — when overloading in game mode, switch to angry pulsing red.
     const fill = document.getElementById('jam-fill');
     fill.style.width = (state.jamMeter * 100).toFixed(0) + '%';

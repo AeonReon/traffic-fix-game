@@ -422,6 +422,82 @@ html, body {
   50%      { transform: translateX(-50%) scale(1.04); }
 }
 
+/* Targets panel — game mode only. Sits below the HUD on the right; small
+   stacked pills with progress fill. Hit state turns the row green and
+   replaces the icon with a checkmark. */
+#targets {
+  position: absolute;
+  top: calc(96px + env(safe-area-inset-top));
+  right: 14px;
+  width: 250px;
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 5;
+}
+#targets.hidden { display: none; }
+.targets-title {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--ink-soft); font-weight: 800;
+  margin-bottom: 2px;
+}
+.target { display: flex; flex-direction: column; gap: 4px; }
+.target-row {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--ink);
+}
+.target-icon { font-size: 14px; flex-shrink: 0; }
+.target-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.target-progress { font-size: 10px; color: var(--ink-soft); font-weight: 700; }
+.target-bar {
+  height: 5px; background: rgba(42, 47, 60, 0.1); border-radius: 3px; overflow: hidden;
+}
+.target-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(to right, #5aa3c9, #4fa16a);
+  border-radius: 3px; transition: width 0.4s;
+}
+.target.hit .target-fill {
+  background: #4fa16a;
+}
+.target.hit .target-icon::after { content: ' ✓'; color: #4fa16a; font-weight: 800; }
+.target.hit .target-label { color: #2f8a4f; }
+.target.hit { animation: targetPulse 1.2s ease; }
+@keyframes targetPulse {
+  0%, 100% { transform: scale(1); }
+  40%      { transform: scale(1.04); }
+}
+
+/* Build version pill — bottom-right corner. Low opacity so it doesn't
+   compete with gameplay. Shows on every screen for quick "did the page
+   actually update?" verification. */
+#version-pill {
+  position: fixed;
+  right: 6px; bottom: 6px;
+  bottom: calc(6px + env(safe-area-inset-bottom));
+  padding: 2px 7px;
+  font-size: 10px; font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(42, 47, 60, 0.1);
+  border-radius: 6px;
+  pointer-events: none;
+  opacity: 0.6;
+  z-index: 60;
+  font-family: -apple-system, "SF Mono", Menlo, monospace;
+}
+
+@media (max-width: 640px) {
+  #targets {
+    top: calc(120px + env(safe-area-inset-top));
+    right: 10px;
+    left: 10px;
+    width: auto;
+    padding: 8px 10px;
+  }
+  .target-label { font-size: 11px; }
+}
+
 .toast {
   position: absolute; bottom: 96px; left: 50%; transform: translateX(-50%);
   background: var(--ink); color: var(--bg);

@@ -101,6 +101,21 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-26 — v27 (slow-ramp + gate-reachability + targets + version pill)** —
+  Three fixes for the v26 "starts too hot" feedback. **(1) Slow demand
+  ramp** — universal across modes; spawn intervals start at 0.25× of full
+  for 90 seconds and ease in to 1×, so the player has actual time to read
+  the city before things get hot. **(2) Gate-reachability gate** —
+  disconnected entries (N / S in the default starter map) no longer queue
+  cars at all until the player builds a road that reaches them. Stops the
+  "city collapses before you place anything" failure mode dead. **(3)
+  Three targets in the HUD (game mode only)** — "Earn $500", "House 30
+  people", "Sustain $30/min for 60s". Pills with progress fill on the
+  right side under the HUD; hit one and you get +$100 bonus, a chime, six
+  green sparkle bursts, and a permanent ✓. Targets persist in the save
+  file. This is M2 from `make-it-a-game.md`. Plus: **build-version pill**
+  bottom-right (`v27`) so we can verify a deploy reached the device
+  without guessing.
 - **2026-04-26 — v26 (Game Mode + app icon)** — The single biggest pivot
   since v3: this is now actually a game. Splash now opens with a mode
   picker — **Free Play** (the existing sandbox, unchanged) and **Game
