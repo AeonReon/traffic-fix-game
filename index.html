@@ -188,30 +188,39 @@
   </div>
 
   <div id="targets" class="panel hidden">
-    <div class="targets-title">Goals</div>
-    <div class="target" data-target="earn500">
-      <div class="target-row">
-        <span class="target-icon">💰</span>
-        <span class="target-label">Earn $500</span>
-        <span class="target-progress">$0 / $500</span>
+    <button class="targets-header" id="targets-toggle" aria-label="Toggle goals">
+      <span class="targets-title">Goals</span>
+      <span class="targets-summary">0 hit</span>
+      <span class="targets-chevron">▾</span>
+    </button>
+    <div class="targets-body">
+      <div class="target" data-target="earn">
+        <div class="target-row">
+          <span class="target-icon">💰</span>
+          <span class="target-label">Earn $500</span>
+          <span class="target-tier">T1</span>
+        </div>
+        <div class="target-bar"><div class="target-fill"></div></div>
+        <div class="target-progress">$0 / $500</div>
       </div>
-      <div class="target-bar"><div class="target-fill"></div></div>
-    </div>
-    <div class="target" data-target="people30">
-      <div class="target-row">
-        <span class="target-icon">🏘️</span>
-        <span class="target-label">House 30 people</span>
-        <span class="target-progress">0 / 30</span>
+      <div class="target" data-target="people">
+        <div class="target-row">
+          <span class="target-icon">🏘️</span>
+          <span class="target-label">House 30 people</span>
+          <span class="target-tier">T1</span>
+        </div>
+        <div class="target-bar"><div class="target-fill"></div></div>
+        <div class="target-progress">0 / 30</div>
       </div>
-      <div class="target-bar"><div class="target-fill"></div></div>
-    </div>
-    <div class="target" data-target="income60s">
-      <div class="target-row">
-        <span class="target-icon">🚀</span>
-        <span class="target-label">Sustain $30/min for 60s</span>
-        <span class="target-progress">0 / 60s</span>
+      <div class="target" data-target="income">
+        <div class="target-row">
+          <span class="target-icon">🚀</span>
+          <span class="target-label">Sustain $30/min · 60s</span>
+          <span class="target-tier">T1</span>
+        </div>
+        <div class="target-bar"><div class="target-fill"></div></div>
+        <div class="target-progress">0s / 60s</div>
       </div>
-      <div class="target-bar"><div class="target-fill"></div></div>
     </div>
   </div>
 
@@ -220,7 +229,7 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <div id="version-pill" title="Build version">v27</div>
+  <div id="version-pill" title="Build version">v28</div>
 </div>
 
 <script src="js/game.js"></script>

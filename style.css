@@ -422,50 +422,97 @@ html, body {
   50%      { transform: translateX(-50%) scale(1.04); }
 }
 
-/* Targets panel — game mode only. Sits below the HUD on the right; small
-   stacked pills with progress fill. Hit state turns the row green and
-   replaces the icon with a checkmark. */
+/* Targets panel — game mode only. Sits below the HUD on the right.
+   Tap header to collapse / expand. Tiered: each row shows the current
+   tier's goal; T1, T2... appear in the corner; ★ when maxed out. */
 #targets {
   position: absolute;
   top: calc(96px + env(safe-area-inset-top));
   right: 14px;
-  width: 250px;
-  padding: 10px 12px;
-  display: flex; flex-direction: column; gap: 8px;
+  width: 248px;
+  padding: 0;
   z-index: 5;
+  overflow: hidden;
 }
 #targets.hidden { display: none; }
-.targets-title {
-  font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;
-  color: var(--ink-soft); font-weight: 800;
-  margin-bottom: 2px;
+.targets-header {
+  width: 100%;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  color: var(--ink);
+  -webkit-tap-highlight-color: transparent;
 }
-.target { display: flex; flex-direction: column; gap: 4px; }
+.targets-header:hover { background: rgba(42, 47, 60, 0.04); }
+.targets-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--ink-soft); font-weight: 800;
+}
+.targets-summary {
+  flex: 1;
+  text-align: right;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  font-weight: 700;
+}
+.targets-chevron {
+  color: var(--ink-soft);
+  font-size: 12px;
+  transition: transform 0.2s;
+}
+#targets.collapsed .targets-chevron { transform: rotate(-90deg); }
+.targets-body {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 0 12px 10px;
+  max-height: 320px;
+  overflow: hidden;
+  transition: max-height 0.25s ease, padding 0.2s, opacity 0.2s;
+}
+#targets.collapsed .targets-body {
+  max-height: 0;
+  padding-top: 0; padding-bottom: 0;
+  opacity: 0;
+}
+.target { display: flex; flex-direction: column; gap: 3px; }
 .target-row {
   display: flex; align-items: center; gap: 6px;
   font-size: 12px; font-weight: 600; color: var(--ink);
 }
 .target-icon { font-size: 14px; flex-shrink: 0; }
 .target-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.target-progress { font-size: 10px; color: var(--ink-soft); font-weight: 700; }
+.target-tier {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.04em;
+  background: rgba(58, 124, 165, 0.16);
+  color: #2f5a85;
+  padding: 1px 5px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.target-progress {
+  font-size: 10px; color: var(--ink-soft); font-weight: 700;
+  margin-left: 20px;
+}
 .target-bar {
   height: 5px; background: rgba(42, 47, 60, 0.1); border-radius: 3px; overflow: hidden;
+  margin-left: 20px;
 }
 .target-fill {
   height: 100%; width: 0%;
   background: linear-gradient(to right, #5aa3c9, #4fa16a);
   border-radius: 3px; transition: width 0.4s;
 }
-.target.hit .target-fill {
-  background: #4fa16a;
+.target.maxed .target-fill {
+  background: linear-gradient(to right, #d4a04a, #f0c060);
 }
-.target.hit .target-icon::after { content: ' ✓'; color: #4fa16a; font-weight: 800; }
-.target.hit .target-label { color: #2f8a4f; }
-.target.hit { animation: targetPulse 1.2s ease; }
-@keyframes targetPulse {
-  0%, 100% { transform: scale(1); }
-  40%      { transform: scale(1.04); }
+.target.maxed .target-tier {
+  background: rgba(212, 160, 74, 0.22);
+  color: #8a6520;
 }
+.target.maxed .target-label { color: #8a6520; }
 
 /* Build version pill — bottom-right corner. Low opacity so it doesn't
    compete with gameplay. Shows on every screen for quick "did the page
@@ -493,7 +540,6 @@ html, body {
     right: 10px;
     left: 10px;
     width: auto;
-    padding: 8px 10px;
   }
   .target-label { font-size: 11px; }
 }

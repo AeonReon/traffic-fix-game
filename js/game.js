@@ -88,7 +88,7 @@
 
   // Build version — bumped on every ship; shown in the corner pill so the
   // user can see at a glance whether the page reloaded with a new build.
-  const VERSION = 'v27';
+  const VERSION = 'v28';
 
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
@@ -136,35 +136,59 @@
   const OVERLOAD_TIME = 30;       // seconds at >= OVERLOAD_JAM
 
   // Game-mode targets (M2 from research/make-it-a-game.md). Visible in the
-  // HUD as 3 pills; soft goals — no fail if you miss them. Each one fires a
-  // toast and a permanent ✓ when hit. Order is from easy → spicy.
+  // HUD as 3 pills; soft goals — no fail if you miss them.
+  //
+  // TIERED — each target has a list of escalating goals. Hit one, get a
+  // celebratory burst + cash bonus, the bar resets, and the *next* tier
+  // appears in its place. This is what "make it feel like a real run"
+  // needs: a never-ending goal that keeps escalating with the city.
+  //
+  // For income, each tier raises the $/min threshold; the sustain duration
+  // stays at 60 seconds.
   const TARGET_DEFS = [
     {
-      id: 'earn500',
+      id: 'earn',
       icon: '💰',
-      label: 'Earn $500',
-      goal: 500,
-      progress: (s) => Math.min(500, s.totalEarned),
-      format: (v) => `$${Math.round(v)} / $500`
+      tiers: [500, 2000, 10000, 50000, 250000],
+      labelTpl: (g) => `Earn $${g.toLocaleString()}`,
+      progress: (s) => s.totalEarned,
+      format:   (v, g) => `$${Math.floor(v).toLocaleString()} / $${g.toLocaleString()}`
     },
     {
-      id: 'people30',
+      id: 'people',
       icon: '🏘️',
-      label: 'House 30 people',
-      goal: 30,
-      progress: (s) => Math.min(30, s.blocks.reduce((n, b) => n + (b.type === 'house' ? 2 : 0), 0)),
-      format: (v) => `${Math.round(v)} / 30`
+      tiers: [30, 100, 300, 1000, 5000],
+      labelTpl: (g) => `House ${g.toLocaleString()} people`,
+      progress: (s) => s.blocks.reduce((n, b) => n + (b.type === 'house' ? 2 : 0), 0),
+      format:   (v, g) => `${Math.floor(v)} / ${g.toLocaleString()}`
     },
     {
-      id: 'income60s',
+      id: 'income',
       icon: '🚀',
-      label: 'Sustain $30/min for 60s',
-      goal: 60,
-      progress: (s) => Math.min(60, s._incomeSustainSec || 0),
-      format: (v) => `${Math.round(v)} / 60s`
+      tiers: [30, 100, 300, 1000, 5000],   // $/min thresholds
+      isIncome: true,
+      goalSec: 60,
+      labelTpl: (threshold) => `Sustain $${threshold.toLocaleString()}/min · 60s`,
+      progress: (s) => s._incomeSustainSec || 0,
+      format:   (v) => `${Math.floor(v)}s / 60s`
     }
   ];
-  const INCOME_SUSTAIN_THRESHOLD = 30;  // $/min
+
+  // Cash bonus per tier (matches array index). Bigger goals → bigger payout.
+  const TIER_BONUSES = [100, 250, 1000, 5000, 25000];
+
+  // Helpers — given target def + current tier, return the active goal value
+  // and threshold (if income).
+  function targetActiveGoal(def, tier) {
+    if (def.isIncome) return def.goalSec;          // 60s for all tiers
+    return def.tiers[Math.min(tier, def.tiers.length - 1)];
+  }
+  function targetActiveThreshold(def, tier) {
+    return def.tiers[Math.min(tier, def.tiers.length - 1)];
+  }
+  function targetMaxedOut(def, tier) {
+    return tier >= def.tiers.length;
+  }
 
   function gridSteps(lenPx) {
     return Math.max(1, Math.round(lenPx / GRID));
@@ -225,8 +249,10 @@
     bestMoney: 0,
     bestSurvived: 0,        // longest survived run, seconds
 
-    // Targets (M2). Persisted; once hit, stays hit for the run.
-    targetsHit: {},         // { earn500: true, ... }
+    // Targets (M2). Tiered — each target has multiple escalating goals.
+    // targetTiers stores the *current* tier index per target id.
+    targetTiers: {},        // { earn: 0, people: 1, ... }
+    targetsCollapsed: false,
     earnSamples: [],        // last 60 numbers ($/sec for that sim-second)
     earnLastSampleAt: -1,
     earnLastTotal: 0,
@@ -412,7 +438,8 @@
       bestMoney: state.bestMoney,
       bestSurvived: state.bestSurvived,
       runTime: state.time,
-      targetsHit: state.targetsHit,
+      targetTiers: state.targetTiers,
+      targetsCollapsed: state.targetsCollapsed,
       earnSamples: state.earnSamples
     };
   }
@@ -448,7 +475,8 @@
       state.peakPeople = data.peakPeople || 0;
       state.bestMoney = data.bestMoney || 0;
       state.bestSurvived = data.bestSurvived || 0;
-      state.targetsHit = data.targetsHit || {};
+      state.targetTiers = data.targetTiers || {};
+      state.targetsCollapsed = !!data.targetsCollapsed;
       state.earnSamples = Array.isArray(data.earnSamples) ? data.earnSamples.slice(-60) : [];
       state.earnLastSampleAt = -1;
       state.earnLastTotal = state.totalEarned;
@@ -740,9 +768,16 @@
       }
     }
 
+    // Snap to existing road nodes / edge points — but skip nodes that
+    // already have a building, and skip nodes that are *only* part of a
+    // building (so tapping near a house drops a new house next door rather
+    // than rejecting). Otherwise the small house render misleads the player
+    // into thinking they have lots of room.
     const sn = snapRadii();
-    const nodeSnap = findNearestNode(wx, wy, sn.node * 1.3);
-    const edgeSnap = !nodeSnap ? findNearestEdgePoint(wx, wy, sn.edge * 1.3) : null;
+    const blockedNodeIds = new Set(state.blocks.map(b => b.nodeId));
+    const nodeSnapRaw = findNearestNode(wx, wy, sn.node);
+    const nodeSnap = (nodeSnapRaw && !blockedNodeIds.has(nodeSnapRaw.id)) ? nodeSnapRaw : null;
+    const edgeSnap = !nodeSnap ? findNearestEdgePoint(wx, wy, sn.edge) : null;
 
     let node;
     if (nodeSnap) node = nodeSnap;
@@ -750,7 +785,16 @@
     else node = makeNode(wx, wy);
 
     if (node.entry) return { ok: false, reason: 'Can\'t place on a gate' };
-    if (state.blocks.some(b => b.nodeId === node.id)) return { ok: false, reason: 'Building already here' };
+    if (blockedNodeIds.has(node.id)) return { ok: false, reason: 'Building already here' };
+
+    // Visual / footprint check — keep buildings at least one grid-step apart
+    // so a new house never overlaps an existing one's drawn plot.
+    const MIN_BLOCK_DIST = 50;
+    for (const b of state.blocks) {
+      if (Math.hypot(b.x - node.x, b.y - node.y) < MIN_BLOCK_DIST) {
+        return { ok: false, reason: 'Too close to another building' };
+      }
+    }
 
     const block = {
       id: state.nextBlockId++,
@@ -1370,7 +1414,12 @@
       // Rolling income/min — sum of the windowed per-sec samples.
       const incomePerMin = state.earnSamples.reduce((a, b) => a + b, 0)
         * (60 / Math.max(1, state.earnSamples.length));
-      if (incomePerMin >= INCOME_SUSTAIN_THRESHOLD) {
+      const incomeDef = TARGET_DEFS.find(d => d.isIncome);
+      const incomeTier = state.targetTiers[incomeDef.id] || 0;
+      const threshold = targetMaxedOut(incomeDef, incomeTier)
+        ? Infinity
+        : targetActiveThreshold(incomeDef, incomeTier);
+      if (incomePerMin >= threshold) {
         state._incomeSustainSec += dt;
       } else {
         // Reset on drop — "sustain" means continuous. Soft 2× drain instead
@@ -1801,11 +1850,15 @@
         ctx.stroke();
       }
 
-      // Shadow common to all types.
-      ctx.fillStyle = 'rgba(30, 35, 50, 0.18)';
-      ctx.beginPath();
-      ctx.ellipse(p.sx + 2, p.sy + 5 * s, 26 * s * sizeMul, 10 * s * sizeMul, 0, 0, Math.PI * 2);
-      ctx.fill();
+      // Shadow — skip for house/shop (their plot already grounds them with
+      // its own subtle shadow). Mall keeps the broad shadow because its
+      // parking lot doesn't fully wrap the building.
+      if (type === 'mall') {
+        ctx.fillStyle = 'rgba(30, 35, 50, 0.18)';
+        ctx.beginPath();
+        ctx.ellipse(p.sx + 2, p.sy + 5 * s, 26 * s * sizeMul, 10 * s * sizeMul, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       if (type === 'house') drawHouse(p.sx, p.sy, s, b.id);
       else if (type === 'mall') drawMall(p.sx, p.sy, s);
@@ -1817,7 +1870,47 @@
   const HOUSE_ROOF = ['#8a5c3e', '#7d4f2f', '#94633e', '#80513a', '#a06846'];
   const SHOP_AWNING = ['#db6d51', '#c74a3d', '#d6a05a', '#4fa16a', '#5987c2'];
 
+  // Cheap pseudo-random hash for seeded sprig placement on plots.
+  function seedHash(n) {
+    const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  // A "plot" is the soft tinted square around a building. It's the visual
+  // claim of land that matches the placement footprint, so the player can
+  // see exactly how much space a building will take. Sprigs of greenery /
+  // texture are seeded per building so neighbours don't look identical.
+  function drawPlot(cx, cy, plotR, fillCol, sprigCols, seed) {
+    ctx.fillStyle = fillCol;
+    ctx.beginPath();
+    roundedRect(cx - plotR, cy - plotR, plotR * 2, plotR * 2, plotR * 0.22);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(74, 90, 60, 0.22)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    // 4 sprigs scattered in the plot, away from the central building body.
+    for (let i = 0; i < 4; i++) {
+      const px = cx - plotR + plotR * 0.16 + seedHash(seed * 17 + i) * plotR * 1.68;
+      const py = cy - plotR + plotR * 0.16 + seedHash(seed * 31 + i + 5) * plotR * 1.68;
+      if (Math.hypot(px - cx, py - cy) < plotR * 0.62) continue;
+      ctx.fillStyle = sprigCols[i % sprigCols.length];
+      ctx.beginPath();
+      ctx.arc(px, py, plotR * 0.085, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Soft grounding shadow under the building — small, sits inside the plot.
+    ctx.fillStyle = 'rgba(30, 35, 50, 0.14)';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + plotR * 0.4, plotR * 0.6, plotR * 0.16, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   function drawHouse(cx, cy, s, seed = 0) {
+    // Garden plot first — claims the building's visual footprint so the
+    // player intuitively knows how much space a house occupies.
+    drawPlot(cx, cy, 28 * s, '#cbd9a4',
+             ['#5b8a55', '#7da966', '#a8c97e', '#bfd690'], seed);
+
     const w = 44 * s, h = 38 * s;
     const bodyTop = cy - h / 2 + 8 * s;
     const bodyBot = cy + h / 2;
@@ -1889,6 +1982,12 @@
   }
 
   function drawShop(cx, cy, s, seed = 0) {
+    // Plaza plot — slightly warmer / sandier than a house garden so shops
+    // read as "commercial". Same footprint, so placement intuitions
+    // transfer between building types.
+    drawPlot(cx, cy, 28 * s, '#dcd1b3',
+             ['#a89880', '#8a7d65', '#bfa988', '#7d8a72'], seed + 100);
+
     const w = 46 * s, h = 42 * s;
     const awning = SHOP_AWNING[seed % SHOP_AWNING.length];
     const awningDark = shadeColor(awning, -0.15);
@@ -2349,6 +2448,16 @@
     });
     document.getElementById('btn-menu').addEventListener('click', backToMenu);
 
+    // Collapse / expand the goals panel.
+    const targetsToggle = document.getElementById('targets-toggle');
+    if (targetsToggle) {
+      targetsToggle.addEventListener('click', () => {
+        state.targetsCollapsed = !state.targetsCollapsed;
+        scheduleSave();
+        renderTargets();
+      });
+    }
+
     // Mode-pick on splash. Each mode has its own Continue / Start fresh
     // pair; clicking Start either resumes a saved city of that mode or
     // begins a fresh one.
@@ -2651,7 +2760,7 @@
     state.money = STARTING_MONEY;
     state.totalEarned = 0;
     state.peakPeople = 0;
-    state.targetsHit = {};
+    state.targetTiers = {};
     state.earnSamples = [];
     state.earnLastSampleAt = -1;
     state.earnLastTotal = 0;
@@ -2683,20 +2792,30 @@
     refreshToolCosts();
   }
 
-  // Target progress + hit detection. Cheap; called from stepSim each tick
-  // when in game mode. Toast + score burst on the first hit of each one.
+  // Target progress + hit detection. Tiered — when you cross the current
+  // tier's goal, the tier increments and the next goal slots in. Each tier
+  // hit fires a toast + cash bonus + sparkle burst.
   function checkTargets() {
     for (const def of TARGET_DEFS) {
-      if (state.targetsHit[def.id]) continue;
+      const tier = state.targetTiers[def.id] || 0;
+      if (targetMaxedOut(def, tier)) continue;
       const v = def.progress(state);
-      if (v >= def.goal) {
-        state.targetsHit[def.id] = true;
-        toast(`✓ ${def.label}`, 2600);
-        // Bonus money + a fanfare burst near the HUD origin.
-        state.money += 100;
-        state.totalEarned += 100;
-        // Spawn a series of sparkle bursts at the screen-centre to draw the
-        // eye to the toast. Anchored in screen coords via render side.
+      const goal = targetActiveGoal(def, tier);
+      if (v >= goal) {
+        const newTier = tier + 1;
+        state.targetTiers[def.id] = newTier;
+        const bonus = TIER_BONUSES[Math.min(tier, TIER_BONUSES.length - 1)];
+        state.money += bonus;
+        state.totalEarned += bonus;
+        // Sustain progress resets whenever the income tier bumps — the next
+        // tier's threshold is higher so the current run no longer counts.
+        if (def.isIncome) state._incomeSustainSec = 0;
+        const label = def.labelTpl(targetActiveThreshold(def, tier));
+        const maxed = targetMaxedOut(def, newTier);
+        toast(maxed
+          ? `✓ ${label} — maxed out! +$${bonus.toLocaleString()}`
+          : `✓ ${label} — +$${bonus.toLocaleString()}`, 2800);
+        // Sparkle burst at the screen centre. Six bursts, staggered.
         for (let i = 0; i < 6; i++) {
           state.effects.push({
             x: LOGICAL_W / 2 + (Math.random() - 0.5) * 200,
@@ -2711,7 +2830,9 @@
     }
   }
 
-  // Re-render the targets panel from current state. Cheap (3 DOM writes).
+  // Re-render the targets panel from current state. Tier-aware: each row
+  // shows the *current* tier's label + progress; when a tier is maxed, the
+  // row turns gold and reads "✓ Maxed".
   function renderTargets() {
     const panel = document.getElementById('targets');
     if (!panel) return;
@@ -2720,17 +2841,45 @@
       return;
     }
     panel.classList.remove('hidden');
+    panel.classList.toggle('collapsed', !!state.targetsCollapsed);
+
+    // Header summary — "Goals · 1/3 maxed" when there's at least one max.
+    const hdr = panel.querySelector('.targets-summary');
+    if (hdr) {
+      const maxed = TARGET_DEFS.reduce(
+        (n, d) => n + (targetMaxedOut(d, state.targetTiers[d.id] || 0) ? 1 : 0), 0);
+      const ascended = TARGET_DEFS.reduce(
+        (n, d) => n + Math.min(d.tiers.length, state.targetTiers[d.id] || 0), 0);
+      hdr.textContent = ascended === 0
+        ? '0 hit'
+        : `${ascended} hit${maxed ? ` · ${maxed} maxed` : ''}`;
+    }
+
     for (const def of TARGET_DEFS) {
       const row = panel.querySelector(`[data-target="${def.id}"]`);
       if (!row) continue;
+      const tier = state.targetTiers[def.id] || 0;
+      const maxed = targetMaxedOut(def, tier);
+      const goal = maxed ? def.tiers[def.tiers.length - 1] : targetActiveGoal(def, tier);
+      const threshold = maxed
+        ? def.tiers[def.tiers.length - 1]
+        : targetActiveThreshold(def, tier);
       const v = def.progress(state);
-      const pct = Math.min(100, (v / def.goal) * 100);
+      const labelEl = row.querySelector('.target-label');
       const fill = row.querySelector('.target-fill');
       const txt = row.querySelector('.target-progress');
-      if (fill) fill.style.width = pct.toFixed(0) + '%';
-      if (txt) txt.textContent = def.format(v);
-      const hit = !!state.targetsHit[def.id];
-      row.classList.toggle('hit', hit);
+      const tierBadge = row.querySelector('.target-tier');
+      if (labelEl) labelEl.textContent = def.labelTpl(threshold);
+      if (tierBadge) tierBadge.textContent = maxed ? '★' : `T${tier + 1}`;
+      if (maxed) {
+        if (fill) fill.style.width = '100%';
+        if (txt) txt.textContent = '✓ Maxed';
+      } else {
+        const pct = Math.min(100, (v / goal) * 100);
+        if (fill) fill.style.width = pct.toFixed(0) + '%';
+        if (txt) txt.textContent = def.format(v, goal);
+      }
+      row.classList.toggle('maxed', maxed);
     }
   }
 
@@ -3102,6 +3251,9 @@
     generateStars();
     configureSplash();
     setupInput();
+    // Version pill — single source of truth is the JS VERSION constant.
+    const vpill = document.getElementById('version-pill');
+    if (vpill) vpill.textContent = VERSION;
     requestAnimationFrame(frame);
   })();
 })();

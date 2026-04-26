@@ -101,6 +101,24 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-26 — v28 (tiered goals + house gardens + collapsible goals panel)** —
+  Goals now **tier up** — when you hit one, the bar resets and the
+  next-tier goal slides in. Earn $500 → $2,000 → $10,000 → $50,000 →
+  $250,000. House 30 → 100 → 300 → 1k → 5k people. Sustain $30/min →
+  $100 → $300 → $1k → $5k. Each tier hit pays an escalating bonus
+  ($100 → $25k) and a celebratory chime + sparkle burst. T1 / T2…
+  badge in the corner; ★ when fully maxed (gold tier). **Houses now
+  have garden plots** — soft sage rounded square ~56px wide with
+  scattered greenery sprigs, so the visual footprint matches the
+  placement footprint. Shops get a sandstone plaza of the same size.
+  Two new placement rules: tapping near an existing building no longer
+  snaps to its node (so a tap next door drops a new house instead of
+  rejecting), and a 56-unit minimum spacing keeps plots from
+  overlapping. **Goals panel is now collapsible** — tap the header to
+  toggle; collapsed state persists in the save. Header shows live
+  "X hit · Y maxed" summary so you know progress at a glance even
+  collapsed. Dropped the unused INCOME_SUSTAIN_THRESHOLD constant in
+  favour of per-tier thresholds.
 - **2026-04-26 — v27 (slow-ramp + gate-reachability + targets + version pill)** —
   Three fixes for the v26 "starts too hot" feedback. **(1) Slow demand
   ramp** — universal across modes; spawn intervals start at 0.25× of full
