@@ -5,10 +5,28 @@ Running notes so we don't lose direction between sessions.
 > **What's next:** see `RESEARCH.md` (the other session's roadmap).
 > **Coordination rules:** see `docs/COORDINATION.md`.
 
-## Current features (what the player can do today — v25)
+## Current features (what the player can do today — v26)
 
 Single source of truth for "what this game actually is right now."
 Update this list whenever a user-visible feature ships or is cut.
+
+**Modes**
+- **Free Play** — open sandbox, no money, no fail state. Score is the
+  hero stat. Original v25 experience preserved.
+- **Game Mode** — start with $200; pay to build, earn from visits, push
+  the city until it overloads. Money is the hero stat (Score hidden).
+  Soft-fail: 30 sustained seconds at jam ≥ 0.95 → City Collapsed screen
+  with full stats and Best earned / Longest run persisted. Per-mode save
+  slots so a sandbox city and a game-mode run live side-by-side.
+
+**Economy (Game Mode only)**
+- Costs: Road $5 + $1/grid, Bridge $30 + $1/grid, Roundabout $40,
+  House $20, Shop $40, Mall $100. One-way toggle and Erase free.
+- Income per visit: House +$1, Shop +$3, Mall +$8, edge-delivery +$1.
+- Live road-cost preview while dragging; tool buttons show their cost
+  and grey out when unaffordable. `+$N` / `-$N` floating popups make
+  every income/spend event visible.
+- ☰ menu button in the HUD returns to the mode picker.
 
 **Building**
 - Drag roads between any two points (orthogonal / 45° snap to grid)
@@ -83,6 +101,27 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-26 — v26 (Game Mode + app icon)** — The single biggest pivot
+  since v3: this is now actually a game. Splash now opens with a mode
+  picker — **Free Play** (the existing sandbox, unchanged) and **Game
+  Mode** (new). Game Mode mechanics: start with **$200**; every road,
+  bridge, building and roundabout costs money. Income comes from car
+  visits — House +$1, Shop +$3, Mall +$8, edge-delivery +$1. The closed
+  loop is exactly what `make-it-a-game.md` asked for: more buildings →
+  more cars → more visits → more money → more buildings, until the city
+  is overwhelmed. Crash condition: **Jam meter ≥ 0.95 for 30 continuous
+  seconds** triggers City Collapsed gameover with full stats card
+  (survived, peak people, deliveries, visits, best earned, longest run).
+  Bests persist across runs. Save state is per-mode (separate localStorage
+  keys) so a saved sandbox city and a saved game-mode run live side-by-
+  side. Each tool now shows a green cost pill in the toolbar (game mode
+  only); roads and bridges show a live `$N` next to the drag preview that
+  turns red if you can't afford it. Spend events show a `-$N` floating
+  popup at the placement spot; income events show a green `+$N`. New ☰
+  menu icon in the HUD takes you back to the mode picker. App icon
+  (`images/icon.png`, 512×512, the red sports car art) replaces the
+  generated favicon SVG and serves as the apple-touch-icon for home-
+  screen PWA use.
 - **2026-04-24 — v25 (pastel-green map, coloured button borders, Flow fix)** —
   Canvas background shifted from warm cream to pastel sage-green
   radial gradient (`#ebefd4` centre → `#c7d3a4` edges). The map now

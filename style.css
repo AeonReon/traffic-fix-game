@@ -62,6 +62,67 @@ html, body {
   box-shadow: var(--shadow);
   text-align: center;
 }
+.splash-card-wide { max-width: 640px; }
+
+.splash-header {
+  display: flex; align-items: center; gap: 16px;
+  justify-content: center;
+  margin-bottom: 18px;
+}
+.splash-header h1 { margin: 0; text-align: left; }
+.splash-header .sub { margin: 2px 0 0; text-align: left; }
+.splash-icon {
+  width: 64px; height: 64px;
+  border-radius: 16px;
+  box-shadow: var(--shadow-sm);
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
+.mode-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.mode-card {
+  background: rgba(255, 255, 255, 0.7);
+  border: 2px solid rgba(42, 47, 60, 0.08);
+  border-radius: 18px;
+  padding: 18px 16px;
+  text-align: left;
+  display: flex; flex-direction: column; gap: 10px;
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+.mode-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+.mode-card.mode-sandbox { border-color: rgba(90, 142, 104, 0.4); }
+.mode-card.mode-game    { border-color: rgba(219, 109, 81, 0.45); }
+.mode-title {
+  font-size: 18px; font-weight: 800; letter-spacing: -0.01em;
+}
+.mode-card.mode-sandbox .mode-title { color: #4a7a5a; }
+.mode-card.mode-game    .mode-title { color: var(--accent); }
+.mode-blurb {
+  margin: 0;
+  font-size: 13px; line-height: 1.45;
+  color: var(--ink-soft);
+  flex: 1;
+}
+.mode-actions {
+  display: flex; flex-direction: column; gap: 6px;
+  align-items: flex-start;
+}
+.mode-actions .primary { padding: 10px 22px; font-size: 14px; }
+.mode-actions .secondary { padding: 4px 8px; font-size: 12px; }
+
+@media (max-width: 540px) {
+  .mode-grid { grid-template-columns: 1fr; }
+  .splash-header { flex-direction: column; gap: 10px; }
+  .splash-header h1, .splash-header .sub { text-align: center; }
+}
 .splash-card h1 {
   margin: 0 0 4px; font-size: 32px; font-weight: 800; letter-spacing: -0.02em;
 }
@@ -76,8 +137,20 @@ html, body {
   margin: 16px 0 0; font-size: 12px; color: var(--ink-soft);
 }
 .big-number {
-  margin: 6px 0 22px; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  margin: 6px 0 16px; display: flex; flex-direction: column; align-items: center; gap: 4px;
 }
+.go-stats {
+  list-style: none; padding: 0; margin: 0 0 18px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px;
+  text-align: left; font-size: 13px; color: var(--ink-soft);
+}
+.go-stats li {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 4px 8px;
+  background: rgba(42, 47, 60, 0.04);
+  border-radius: 8px;
+}
+.go-stats li b { color: var(--ink); font-weight: 800; }
 .big-number #go-score {
   font-size: 56px; font-weight: 800; color: var(--accent); letter-spacing: -0.02em;
 }
@@ -144,6 +217,11 @@ html, body {
 .stat .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-soft); font-weight: 700; }
 .stat .v { font-size: 20px; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; }
 .stat.stat-hero .v { font-size: 28px; color: var(--accent); }
+.stat.stat-money .v { color: #2f8a4f; }
+.stat.stat-money .money-prefix { color: #4fa16a; font-weight: 700; margin-right: 1px; }
+.stat.stat-money.broke .v { color: var(--bad); }
+.stat.stat-money.hidden { display: none; }
+.stat.stat-score.hidden { display: none; }
 .stat.stat-flow { min-width: 130px; }
 .flow-spark { display: block; width: 110px; height: 20px; margin-top: 2px; }
 #m-pop  { color: #6b8e76; }   /* sage — "people / population / nature" */
@@ -300,6 +378,19 @@ html, body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.tool-cost {
+  font-size: 10px; font-weight: 800;
+  color: #2f8a4f;
+  letter-spacing: 0;
+  margin-top: -2px;
+}
+.tool-cost.hidden { display: none; }
+.tool.unaffordable {
+  opacity: 0.55;
+  filter: saturate(0.6);
+}
+.tool.unaffordable .tool-cost { color: var(--bad); }
+.tool.active .tool-cost { color: white; }
 
 /* Paused overlay — subtle cream wash + centered "Paused" pill. Doesn't block
    interactions so the player can still edit roads/buildings while paused. */

@@ -8,10 +8,11 @@
   // Level — pure pixel coords, fits into a logical 1200×800 space.
   // The renderer scales this to whatever screen it's on.
   // ================================================================
-  // Portrait, with lots of vertical room to build around the W-E starter road.
-  const LOGICAL_W = 1200;
-  const LOGICAL_H = 1560;
-  const GRID = 60;           // grid spacing in world units
+  // Portrait, generous map — bigger than default view, so the player pans
+  // and zooms around to explore / build in different neighbourhoods.
+  const LOGICAL_W = 1800;
+  const LOGICAL_H = 2340;
+  const GRID = 60;
 
   // Day/night cycle — one full day lasts DAY_LENGTH simulated seconds.
   // Keyframes interpolate the tint overlay colour + alpha across the day.
@@ -44,17 +45,17 @@
   // Edge entries: cars enter from one side of the map, exit through another.
   // Coordinates sit just inside the logical 1200×800 area so they render as
   // gates on the border.
-  // All positions sit on grid points (multiples of GRID=60) so the starter
-  // network matches the grid the player is building against.
+  // Entries at the edges of the bigger 1800×2340 map. Starter road is
+  // at vertical centre; N & S gates at top/bottom centre.
   const LEVEL = {
     entries: [
-      { id: 'N', x:  600, y:   60, side: 'N', label: 'N' },
-      { id: 'S', x:  600, y: 1500, side: 'S', label: 'S' },
-      { id: 'W', x:   60, y:  780, side: 'W', label: 'W' },
-      { id: 'E', x: 1140, y:  780, side: 'E', label: 'E' }
+      { id: 'N', x:  900, y:   60, side: 'N', label: 'N' },
+      { id: 'S', x:  900, y: 2280, side: 'S', label: 'S' },
+      { id: 'W', x:   60, y: 1140, side: 'W', label: 'W' },
+      { id: 'E', x: 1740, y: 1140, side: 'E', label: 'E' }
     ],
     starterRoads: [
-      { a: { x: 60, y: 780 }, b: { x: 1140, y: 780 } }
+      { a: { x: 60, y: 1140 }, b: { x: 1740, y: 1140 } }
     ]
   };
 
@@ -85,9 +86,55 @@
   };
   const DELIVERY_POINTS = 1;   // car reaches an exit gate
 
-  // Save / load
-  const SAVE_KEY = 'traffic-flow:v1';
+  // Save / load — per mode. Legacy key stays the sandbox save so existing
+  // saves keep working without migration.
+  const SAVE_KEY_SANDBOX = 'traffic-flow:v1';
+  const SAVE_KEY_GAME = 'traffic-flow:game:v1';
   const SAVE_VERSION = 1;
+
+  // ================================================================
+  // Modes & economy (Game Mode only — Sandbox ignores all of this)
+  // ================================================================
+  const MODE_SANDBOX = 'sandbox';
+  const MODE_GAME = 'game';
+
+  const STARTING_MONEY = 200;
+
+  // Costs in dollars. Roads scale with length so a giant road isn't free.
+  // `perGrid` is dollars per 60-unit grid step in addition to `base`.
+  const COSTS = {
+    road:       { base: 5,  perGrid: 1 },
+    bridge:     { base: 30, perGrid: 1 },
+    oneway:     0,
+    roundabout: 40,
+    house:      20,
+    shop:       40,
+    mall:       100,
+    erase:      0
+  };
+
+  // Income per car-event in game mode. Sandbox uses score points only.
+  const INCOME = {
+    house: 1,
+    shop:  3,
+    mall:  8,
+    exit:  1
+  };
+
+  // Crash / overload — game mode only. Sustained near-max jam ends the run.
+  const OVERLOAD_JAM = 0.95;
+  const OVERLOAD_TIME = 30;       // seconds at >= OVERLOAD_JAM
+
+  function gridSteps(lenPx) {
+    return Math.max(1, Math.round(lenPx / GRID));
+  }
+
+  function roadCost(lenPx, isBridge) {
+    const c = isBridge ? COSTS.bridge : COSTS.road;
+    return c.base + c.perGrid * gridSteps(lenPx);
+  }
+
+  function isGameMode() { return state.mode === MODE_GAME; }
 
   // ================================================================
   // State
@@ -127,6 +174,15 @@
     bestScore: 0,
     jamMeter: 0,
     demandMult: 1.0,
+
+    // Mode + economy (game mode only — ignored in sandbox).
+    mode: MODE_SANDBOX,
+    money: STARTING_MONEY,
+    totalEarned: 0,         // lifetime income this run
+    peakPeople: 0,
+    overloadTimer: 0,       // seconds spent above OVERLOAD_JAM
+    bestMoney: 0,
+    bestSurvived: 0,        // longest survived run, seconds
 
     // Camera / view fitted to LOGICAL coords
     view: { scale: 1, originX: LOGICAL_W / 2, originY: LOGICAL_H / 2, dpr: window.devicePixelRatio || 1 },
@@ -264,9 +320,14 @@
   // =============================================================
   // Persistence — localStorage
   // =============================================================
+  function saveKeyFor(mode) {
+    return mode === MODE_GAME ? SAVE_KEY_GAME : SAVE_KEY_SANDBOX;
+  }
+
   function serializeState() {
     return {
       v: SAVE_VERSION,
+      mode: state.mode,
       nodes: [...state.nodes.values()].map(n => ({
         id: n.id, x: n.x, y: n.y,
         entry: n.entry || null,
@@ -295,7 +356,14 @@
       score: state.score,
       bestScore: state.bestScore,
       flowSamples: state.flowSamples,
-      flowPeak: state.flowPeak
+      flowPeak: state.flowPeak,
+      // Game-mode economy
+      money: state.money,
+      totalEarned: state.totalEarned,
+      peakPeople: state.peakPeople,
+      bestMoney: state.bestMoney,
+      bestSurvived: state.bestSurvived,
+      runTime: state.time
     };
   }
 
@@ -322,7 +390,14 @@
       state.cars = [];
       state.undoStack = [];
       state.jamMeter = 0;
-      state.time = 0;
+      state.overloadTimer = 0;
+      state.time = data.runTime || 0;
+      // Economy fields — default for sandbox saves that didn't have them.
+      state.money = data.money ?? STARTING_MONEY;
+      state.totalEarned = data.totalEarned || 0;
+      state.peakPeople = data.peakPeople || 0;
+      state.bestMoney = data.bestMoney || 0;
+      state.bestSurvived = data.bestSurvived || 0;
       rebuildAdjacency();
       return true;
     } catch (err) {
@@ -337,19 +412,19 @@
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       try {
-        localStorage.setItem(SAVE_KEY, JSON.stringify(serializeState()));
+        localStorage.setItem(saveKeyFor(state.mode), JSON.stringify(serializeState()));
       } catch (err) {
         console.warn('save failed:', err);
       }
     }, 600);
   }
 
-  function hasSavedCity() {
-    try { return !!localStorage.getItem(SAVE_KEY); } catch (_) { return false; }
+  function hasSavedCity(mode) {
+    try { return !!localStorage.getItem(saveKeyFor(mode || state.mode)); } catch (_) { return false; }
   }
 
-  function clearSavedCity() {
-    try { localStorage.removeItem(SAVE_KEY); } catch (_) {}
+  function clearSavedCity(mode) {
+    try { localStorage.removeItem(saveKeyFor(mode || state.mode)); } catch (_) {}
   }
 
   function snapToGrid(x, y) {
@@ -560,6 +635,15 @@
     ];
     if (polyLen(shape) < 40) return { ok: false, reason: 'Too short' };
 
+    // Game mode — check funds before letting the road land.
+    let cost = 0;
+    if (isGameMode()) {
+      cost = roadCost(polyLen(shape), isBridge);
+      if (state.money < cost) {
+        return { ok: false, reason: `Need $${cost} — got $${state.money}` };
+      }
+    }
+
     // Regular roads cannot cross existing non-bridge roads. Use Bridge for that.
     if (!isBridge) {
       for (const e of state.edges) {
@@ -578,14 +662,29 @@
 
     const [fwd, rev] = makeEdge(startNode, endNode, { custom: true, bridge: isBridge, shape });
     rebuildAdjacency();
-    state.undoStack.push({ type: 'road', edgeIds: [fwd.id, rev.id] });
+    if (isGameMode() && cost > 0) {
+      state.money -= cost;
+      state.effects.push({ x: (startNode.x + endNode.x) / 2, y: (startNode.y + endNode.y) / 2,
+                           startTime: state.time, kind: 'spend', amount: cost });
+    }
+    state.undoStack.push({ type: 'road', edgeIds: [fwd.id, rev.id], cost });
     scheduleSave();
-    return { ok: true };
+    return { ok: true, cost };
   }
 
   // Place a building. `type` is one of BUILDING_TYPES keys.
   function placeBlock(wx, wy, type = 'shop') {
     const spec = BUILDING_TYPES[type] || BUILDING_TYPES.shop;
+
+    // Game mode — check funds first so we don't mutate the network only to bail.
+    let cost = 0;
+    if (isGameMode()) {
+      cost = COSTS[type] || 0;
+      if (state.money < cost) {
+        return { ok: false, reason: `Need $${cost} — got $${state.money}` };
+      }
+    }
+
     const sn = snapRadii();
     const nodeSnap = findNearestNode(wx, wy, sn.node * 1.3);
     const edgeSnap = !nodeSnap ? findNearestEdgePoint(wx, wy, sn.edge * 1.3) : null;
@@ -609,9 +708,13 @@
     };
     state.blocks.push(block);
     rebuildAdjacency();
-    state.undoStack.push({ type: 'block', blockId: block.id, nodeId: node.id });
+    if (isGameMode() && cost > 0) {
+      state.money -= cost;
+      state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'spend', amount: cost });
+    }
+    state.undoStack.push({ type: 'block', blockId: block.id, nodeId: node.id, cost });
     scheduleSave();
-    return { ok: true };
+    return { ok: true, cost };
   }
 
   function undoLast() {
@@ -622,14 +725,16 @@
       state.edges = state.edges.filter(e => !gone.has(e.id));
       state.cars = state.cars.filter(c => !c.path.some(e => gone.has(e.id)));
       rebuildAdjacency();
+      if (isGameMode() && action.cost) state.money += action.cost;
       scheduleSave();
-      return { ok: true, what: 'road' };
+      return { ok: true, what: 'road', refund: action.cost || 0 };
     }
     if (action.type === 'block') {
       state.blocks = state.blocks.filter(b => b.id !== action.blockId);
       state.cars = state.cars.filter(c => c.blockId !== action.blockId);
+      if (isGameMode() && action.cost) state.money += action.cost;
       scheduleSave();
-      return { ok: true, what: 'block' };
+      return { ok: true, what: 'block', refund: action.cost || 0 };
     }
     return { ok: false };
   }
@@ -648,6 +753,13 @@
     // Collect edges touching this node (both directions).
     const touching = state.edges.filter(e => e.from === nodeId || e.to === nodeId);
     if (touching.length < 3) return { ok: false, reason: 'need 3+ roads' };
+
+    // Game mode — funds check before mutating anything.
+    if (isGameMode()) {
+      if (state.money < COSTS.roundabout) {
+        return { ok: false, reason: `Need $${COSTS.roundabout} — got $${state.money}` };
+      }
+    }
 
     // Direction vector AWAY from the node for each touching edge.
     function dirAway(e) {
@@ -732,6 +844,10 @@
     const modifiedIds = new Set(touching.map(e => e.id));
     state.cars = state.cars.filter(c => !c.path.some(e => modifiedIds.has(e.id)));
     rebuildAdjacency();
+    if (isGameMode()) {
+      state.money -= COSTS.roundabout;
+      state.effects.push({ x: node.x, y: node.y, startTime: state.time, kind: 'spend', amount: COSTS.roundabout });
+    }
     scheduleSave();
     return { ok: true };
   }
@@ -1119,7 +1235,17 @@
             const pts = (spec && spec.points) || 1;
             state.score += pts;
             state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'visit' });
-            state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'points', points: pts });
+            // In game mode, the building EARNS dollars for the city. The
+            // floating popup shows $earnings instead of points so the
+            // player feels the income loop directly.
+            if (isGameMode()) {
+              const earn = INCOME[block.type] || 0;
+              state.money += earn;
+              state.totalEarned += earn;
+              state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'earn', amount: earn });
+            } else {
+              state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'points', points: pts });
+            }
             Audio.chime(block.type);
           }
           state.visits++;
@@ -1131,7 +1257,14 @@
           const exit = state.entries.find(ee => ee.id === car.sinkEntryId);
           if (exit) {
             state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'deliver' });
-            state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'points', points: DELIVERY_POINTS });
+            if (isGameMode()) {
+              const earn = INCOME.exit || 0;
+              state.money += earn;
+              state.totalEarned += earn;
+              state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'earn', amount: earn });
+            } else {
+              state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'points', points: DELIVERY_POINTS });
+            }
             Audio.chime('exit');
           }
           toRemove.push(car);
@@ -1188,6 +1321,33 @@
     }
     if (jamPressure > 0) state.jamMeter = Math.min(JAM_FAIL, state.jamMeter + JAM_FILL_RATE * dt * Math.max(1, jamPressure / 3));
     else state.jamMeter = Math.max(0, state.jamMeter - JAM_DRAIN_RATE * dt);
+
+    // Game-mode crash condition — sustained near-max jam triggers a
+    // city collapse. Sandbox keeps the meter purely visual.
+    if (isGameMode()) {
+      // Track peak population for the post-game stats card.
+      const ppl = state.blocks.reduce((n, b) => n + (b.type === 'house' ? 2 : 0), 0);
+      if (ppl > state.peakPeople) state.peakPeople = ppl;
+
+      if (state.jamMeter >= OVERLOAD_JAM) {
+        state.overloadTimer += dt;
+      } else {
+        state.overloadTimer = Math.max(0, state.overloadTimer - dt * 0.5);
+      }
+      // Warning flash at 50% / 75% of overload time.
+      if (state.overloadTimer > 0 && !state.over) {
+        const warnT = state.overloadTimer;
+        if (warnT > OVERLOAD_TIME * 0.5 && !state._warnedHalf) {
+          state._warnedHalf = true;
+          toast('City overwhelmed — jam clearing or collapse!', 2400);
+        }
+        if (warnT >= OVERLOAD_TIME) {
+          endGameCrash();
+        }
+      } else if (state.overloadTimer === 0) {
+        state._warnedHalf = false;
+      }
+    }
     // Sandbox mode — no game-over popup, just the visible jam bar.
   }
 
@@ -1206,9 +1366,12 @@
   }
 
   function fitCamera() {
+    // Default view shows a centred ~1200×1600 window into the bigger map.
+    // Player pans (2-finger) and pinch-zooms to explore the rest.
+    const SHOW_W = 1200, SHOW_H = 1600;
     const pad = 40;
-    const sx = (state.view.w - pad * 2) / LOGICAL_W;
-    const sy = (state.view.h - pad * 2) / LOGICAL_H;
+    const sx = (state.view.w - pad * 2) / SHOW_W;
+    const sy = (state.view.h - pad * 2) / SHOW_H;
     state.view.scale = Math.min(sx, sy);
     state.view.originX = LOGICAL_W / 2;
     state.view.originY = LOGICAL_H / 2;
@@ -1230,14 +1393,14 @@
   function render() {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // Pastel-sage parkland gradient — feels like grass without screaming
-    // green. Lighter near centre, a little richer at the corners.
+    // Parkland gradient — proper sage, warm enough to stay calm but now
+    // actually green. Darker than v25.
     const cw = canvas.width, ch = canvas.height;
     const grad = ctx.createRadialGradient(cw / 2, ch / 2, 0,
                                           cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
-    grad.addColorStop(0.0, '#ebefd4');   // soft sage cream
-    grad.addColorStop(0.55, '#dce4bd');  // pastel green
-    grad.addColorStop(1.0, '#c7d3a4');   // deeper sage at the edges
+    grad.addColorStop(0.0, '#d4dfae');
+    grad.addColorStop(0.55, '#bfcd93');
+    grad.addColorStop(1.0, '#a6b87a');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, cw, ch);
     ctx.scale(state.view.dpr, state.view.dpr);
@@ -1558,94 +1721,241 @@
   const SHOP_AWNING = ['#db6d51', '#c74a3d', '#d6a05a', '#4fa16a', '#5987c2'];
 
   function drawHouse(cx, cy, s, seed = 0) {
-    const w = 40 * s, h = 34 * s;
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
+    const w = 44 * s, h = 38 * s;
+    const bodyTop = cy - h / 2 + 8 * s;
+    const bodyBot = cy + h / 2;
+    const bodyCol = HOUSE_BODY[seed % HOUSE_BODY.length];
+    const roofCol = HOUSE_ROOF[seed % HOUSE_ROOF.length];
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
     ctx.lineWidth = 1.5;
-    // Body
-    ctx.fillStyle = HOUSE_BODY[seed % HOUSE_BODY.length];
+
+    // Chimney first — rendered behind the roof.
+    const cxOff = 10 * s;
+    ctx.fillStyle = '#7a5032';
     ctx.beginPath();
-    roundedRect(cx - w / 2, cy - h / 2 + 6 * s, w, h - 6 * s, 3 * s);
+    ctx.rect(cx + cxOff, cy - h / 2 - 10 * s, 6 * s, 10 * s);
     ctx.fill(); ctx.stroke();
-    // Pitched roof triangle
-    ctx.fillStyle = HOUSE_ROOF[seed % HOUSE_ROOF.length];
+
+    // Pitched roof
+    ctx.fillStyle = roofCol;
     ctx.beginPath();
-    ctx.moveTo(cx - w / 2 - 3 * s, cy - h / 2 + 6 * s);
-    ctx.lineTo(cx, cy - h / 2 - 8 * s);
-    ctx.lineTo(cx + w / 2 + 3 * s, cy - h / 2 + 6 * s);
+    ctx.moveTo(cx - w / 2 - 4 * s, bodyTop);
+    ctx.lineTo(cx, cy - h / 2 - 10 * s);
+    ctx.lineTo(cx + w / 2 + 4 * s, bodyTop);
     ctx.closePath();
     ctx.fill(); ctx.stroke();
+
+    // Body
+    ctx.fillStyle = bodyCol;
+    ctx.beginPath();
+    roundedRect(cx - w / 2, bodyTop, w, bodyBot - bodyTop, 3 * s);
+    ctx.fill(); ctx.stroke();
+
     // Door
     ctx.fillStyle = '#6b4a2f';
-    ctx.fillRect(cx - 4 * s, cy + 2 * s, 8 * s, 12 * s);
-    // Window
-    ctx.fillStyle = 'rgba(255, 250, 238, 0.85)';
-    ctx.fillRect(cx - 14 * s, cy + 2 * s, 7 * s, 7 * s);
-    ctx.fillRect(cx + 7 * s,  cy + 2 * s, 7 * s, 7 * s);
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
+    ctx.lineWidth = 1;
+    const dw = 9 * s, dh = 13 * s;
+    ctx.beginPath();
+    ctx.moveTo(cx - dw / 2, bodyBot);
+    ctx.lineTo(cx - dw / 2, bodyBot - dh + 2 * s);
+    ctx.quadraticCurveTo(cx - dw / 2, bodyBot - dh, cx - dw / 2 + 2 * s, bodyBot - dh);
+    ctx.lineTo(cx + dw / 2 - 2 * s, bodyBot - dh);
+    ctx.quadraticCurveTo(cx + dw / 2, bodyBot - dh, cx + dw / 2, bodyBot - dh + 2 * s);
+    ctx.lineTo(cx + dw / 2, bodyBot);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    // Door knob
+    ctx.fillStyle = '#d4b04a';
+    ctx.beginPath();
+    ctx.arc(cx + dw / 2 - 2 * s, bodyBot - dh / 2, Math.max(0.8, 1.1 * s), 0, Math.PI * 2);
+    ctx.fill();
+
+    // Windows with cross mullions.
+    const ww = 8 * s, wh = 8 * s;
+    const winY = bodyTop + 5 * s;
+    const wins = [ { x: cx - 15 * s }, { x: cx + 7 * s } ];
+    for (const win of wins) {
+      ctx.fillStyle = 'rgba(220, 235, 250, 0.88)';
+      ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.rect(win.x, winY, ww, wh);
+      ctx.fill(); ctx.stroke();
+      // Mullions
+      ctx.strokeStyle = 'rgba(30, 35, 50, 0.45)';
+      ctx.beginPath();
+      ctx.moveTo(win.x + ww / 2, winY); ctx.lineTo(win.x + ww / 2, winY + wh);
+      ctx.moveTo(win.x, winY + wh / 2); ctx.lineTo(win.x + ww, winY + wh / 2);
+      ctx.stroke();
+    }
   }
 
   function drawShop(cx, cy, s, seed = 0) {
-    const w = 42 * s, h = 38 * s;
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
+    const w = 46 * s, h = 42 * s;
+    const awning = SHOP_AWNING[seed % SHOP_AWNING.length];
+    const awningDark = shadeColor(awning, -0.15);
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
     ctx.lineWidth = 1.5;
+
     // Body
     ctx.fillStyle = '#c7a88c';
     ctx.beginPath();
     roundedRect(cx - w / 2, cy - h / 2, w, h, 5 * s);
     ctx.fill(); ctx.stroke();
-    // Roof strip
-    ctx.fillStyle = 'rgba(30, 35, 50, 0.32)';
-    ctx.fillRect(cx - w / 2, cy - h / 2, w, 7 * s);
-    // Awning across the front — colour varies per shop
-    const awning = SHOP_AWNING[seed % SHOP_AWNING.length];
+
+    // Sign band (dark slate top)
+    ctx.fillStyle = 'rgba(30, 35, 50, 0.42)';
+    ctx.fillRect(cx - w / 2, cy - h / 2, w, 8 * s);
+    // Tiny white "SHOP" dot pattern on the sign band
+    ctx.fillStyle = 'rgba(255, 250, 238, 0.85)';
+    for (let i = 0; i < 4; i++) {
+      ctx.fillRect(cx - 10 * s + i * 6 * s, cy - h / 2 + 3 * s, 3 * s, 3 * s);
+    }
+
+    // Awning — striped fabric
+    const ay = cy - h / 2 + 8 * s, ah = 7 * s;
     ctx.fillStyle = awning;
-    const ay = cy - 2 * s, ah = 6 * s;
     ctx.fillRect(cx - w / 2, ay, w, ah);
-    // Zigzag edge under awning (same awning colour)
+    // Stripes
+    ctx.fillStyle = awningDark;
+    const stripeW = w / 5;
+    for (let i = 0; i < 5; i += 2) {
+      ctx.fillRect(cx - w / 2 + i * stripeW, ay, stripeW, ah);
+    }
+    // Zigzag trim under the awning
     ctx.beginPath();
     ctx.moveTo(cx - w / 2, ay + ah);
-    for (let i = 0; i < 8; i++) {
-      const x = cx - w / 2 + (w / 8) * (i + 0.5);
-      ctx.lineTo(x, ay + ah + 3 * s);
-      ctx.lineTo(cx - w / 2 + (w / 8) * (i + 1), ay + ah);
+    const zn = 7;
+    for (let i = 0; i < zn; i++) {
+      const x0 = cx - w / 2 + (w / zn) * i;
+      const x1 = cx - w / 2 + (w / zn) * (i + 1);
+      ctx.lineTo((x0 + x1) / 2, ay + ah + 3.5 * s);
+      ctx.lineTo(x1, ay + ah);
     }
     ctx.fillStyle = awning;
     ctx.fill();
-    // Display window
-    ctx.fillStyle = 'rgba(255, 250, 238, 0.85)';
-    ctx.fillRect(cx - w / 2 + 5 * s, cy + 6 * s, w - 10 * s, h / 2 - 8 * s);
+
+    // Big shopfront window with a mullion + door.
+    const winY = ay + ah + 6 * s, winH = cy + h / 2 - winY - 2 * s;
+    const winX = cx - w / 2 + 4 * s, winW = w - 8 * s;
+    ctx.fillStyle = 'rgba(220, 235, 250, 0.92)';
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.rect(winX, winY, winW, winH); ctx.fill(); ctx.stroke();
+    // Door (right third)
+    const dw = winW * 0.3, dh = winH;
+    const dx = winX + winW - dw;
+    ctx.fillStyle = shadeColor(awning, -0.2);
+    ctx.fillRect(dx, winY, dw, dh);
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
+    ctx.strokeRect(dx, winY, dw, dh);
+    // Window mullions (2 vertical lines in the glass portion)
+    const glassW = winW - dw;
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.4)';
+    ctx.lineWidth = 1;
+    for (let i = 1; i < 3; i++) {
+      const x = winX + (glassW / 3) * i;
+      ctx.beginPath(); ctx.moveTo(x, winY); ctx.lineTo(x, winY + winH); ctx.stroke();
+    }
+  }
+
+  // Helper — darken/lighten a hex colour by a factor (-1..1).
+  function shadeColor(hex, amt) {
+    const c = hex.startsWith('#') ? hex.slice(1) : hex;
+    let r = parseInt(c.slice(0, 2), 16);
+    let g = parseInt(c.slice(2, 4), 16);
+    let b = parseInt(c.slice(4, 6), 16);
+    const f = (x) => Math.max(0, Math.min(255, Math.round(x + (amt > 0 ? (255 - x) : x) * amt)));
+    r = f(r); g = f(g); b = f(b);
+    return `rgb(${r}, ${g}, ${b})`;
   }
 
   function drawMall(cx, cy, s) {
-    const w = 64 * s, h = 42 * s;
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
+    const w = 80 * s, h = 56 * s;
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.65)';
     ctx.lineWidth = 1.5;
+
+    // Parking-lot hint — light band under the building.
+    ctx.fillStyle = 'rgba(150, 150, 160, 0.38)';
+    ctx.beginPath();
+    roundedRect(cx - w / 2 - 5 * s, cy - h / 2 + 2 * s, w + 10 * s, h + 5 * s, 6 * s);
+    ctx.fill();
+    // Parking stripes
+    ctx.strokeStyle = 'rgba(255, 250, 238, 0.75)';
+    ctx.lineWidth = 1;
+    const stripes = 7;
+    for (let i = 0; i < stripes; i++) {
+      const x = cx - w / 2 - 3 * s + (w + 6 * s) * i / (stripes - 1);
+      ctx.beginPath();
+      ctx.moveTo(x, cy + h / 2 + 1 * s);
+      ctx.lineTo(x, cy + h / 2 + 6 * s);
+      ctx.stroke();
+    }
+
+    // Stepped roof (back wing — taller) rendered first, behind main body.
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.65)';
+    ctx.lineWidth = 1.5;
+    ctx.fillStyle = '#9ba6b8';
+    ctx.beginPath();
+    roundedRect(cx - w / 2 + 6 * s, cy - h / 2 - 8 * s, w - 12 * s, 18 * s, 3 * s);
+    ctx.fill(); ctx.stroke();
+
     // Main body
     ctx.fillStyle = '#b0b8c4';
     ctx.beginPath();
-    roundedRect(cx - w / 2, cy - h / 2, w, h, 4 * s);
+    roundedRect(cx - w / 2, cy - h / 2 + 4 * s, w, h - 4 * s, 4 * s);
     ctx.fill(); ctx.stroke();
-    // Darker roof slab
-    ctx.fillStyle = 'rgba(30, 35, 50, 0.28)';
-    ctx.fillRect(cx - w / 2, cy - h / 2, w, 8 * s);
-    // Big glass front
-    ctx.fillStyle = 'rgba(210, 230, 245, 0.88)';
-    ctx.fillRect(cx - w / 2 + 5 * s, cy - h / 2 + 12 * s, w - 10 * s, h - 18 * s);
-    // Mullions (vertical dividers)
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.35)';
-    ctx.lineWidth = 1.2;
-    for (let i = 1; i < 5; i++) {
-      const x = cx - w / 2 + (w / 5) * i;
+
+    // Darker sign band across the top of the main body
+    ctx.fillStyle = 'rgba(30, 35, 50, 0.55)';
+    ctx.fillRect(cx - w / 2, cy - h / 2 + 4 * s, w, 9 * s);
+
+    // Big glass storefront
+    const glassY = cy - h / 2 + 17 * s;
+    const glassH = h - 24 * s;
+    const glassX = cx - w / 2 + 5 * s;
+    const glassW = w - 10 * s;
+    ctx.fillStyle = 'rgba(200, 230, 245, 0.92)';
+    ctx.fillRect(glassX, glassY, glassW, glassH);
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(glassX, glassY, glassW, glassH);
+    // Vertical mullions
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.4)';
+    for (let i = 1; i < 6; i++) {
+      const x = glassX + (glassW / 6) * i;
       ctx.beginPath();
-      ctx.moveTo(x, cy - h / 2 + 12 * s);
-      ctx.lineTo(x, cy + h / 2 - 6 * s);
+      ctx.moveTo(x, glassY); ctx.lineTo(x, glassY + glassH);
       ctx.stroke();
     }
-    // "M" glyph
-    ctx.fillStyle = '#2a2f3c';
-    ctx.font = `bold ${Math.max(10, 14 * s)}px -apple-system, "SF Pro Rounded", sans-serif`;
+    // Horizontal mullion mid-height
+    ctx.beginPath();
+    ctx.moveTo(glassX, glassY + glassH / 2);
+    ctx.lineTo(glassX + glassW, glassY + glassH / 2);
+    ctx.stroke();
+
+    // Central entrance — double doors, darker
+    const doorW = glassW * 0.28;
+    const doorH = glassH * 0.55;
+    ctx.fillStyle = '#3c4256';
+    ctx.fillRect(cx - doorW / 2, glassY + glassH - doorH, doorW, doorH);
+    ctx.strokeStyle = 'rgba(255, 250, 238, 0.6)';
+    ctx.beginPath();
+    ctx.moveTo(cx, glassY + glassH - doorH);
+    ctx.lineTo(cx, glassY + glassH);
+    ctx.stroke();
+
+    // Entrance canopy — small flat awning over the doors
+    ctx.fillStyle = '#6c7a8e';
+    ctx.fillRect(cx - doorW / 2 - 3 * s, glassY + glassH - doorH - 3 * s, doorW + 6 * s, 3 * s);
+
+    // "MALL" sign on the top band
+    ctx.fillStyle = 'rgba(255, 250, 238, 0.9)';
+    ctx.font = `bold ${Math.max(9, 10 * s)}px -apple-system, "SF Pro Rounded", sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('M', cx, cy - h / 2 + 4 * s);
+    ctx.fillText('MALL', cx, cy - h / 2 + 8.5 * s);
   }
 
   // Per-side pastel colour for entry gates — makes each direction memorable.
@@ -1785,7 +2095,6 @@
         const t = Math.min(1, age / LIFE);
         const p = w2s(fx.x, fx.y);
         const rise = (10 + t * 36) * state.view.scale;
-        // Soft shadow for legibility on busy backgrounds
         ctx.font = `bold ${Math.max(13, 18 * state.view.scale)}px -apple-system, "SF Pro Rounded", sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -1794,6 +2103,27 @@
         ctx.fillText('+' + fx.points, p.sx + 1, p.sy - rise + 1);
         ctx.fillStyle = `rgba(219, 109, 81, ${alpha})`;
         ctx.fillText('+' + fx.points, p.sx, p.sy - rise);
+        continue;
+      }
+
+      if (fx.kind === 'earn' || fx.kind === 'spend') {
+        // Floating "+$N" (green, rises) or "-$N" (red, falls).
+        const LIFE = 1.2;
+        const t = Math.min(1, age / LIFE);
+        const p = w2s(fx.x, fx.y);
+        const isEarn = fx.kind === 'earn';
+        const rise = (isEarn ? (10 + t * 38) : -(6 + t * 18)) * state.view.scale;
+        ctx.font = `bold ${Math.max(14, 19 * state.view.scale)}px -apple-system, "SF Pro Rounded", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const alpha = 1 - Math.pow(t, 1.8);
+        const label = (isEarn ? '+$' : '-$') + fx.amount;
+        ctx.fillStyle = `rgba(255, 250, 238, ${alpha * 0.85})`;
+        ctx.fillText(label, p.sx + 1, p.sy - rise + 1);
+        ctx.fillStyle = isEarn
+          ? `rgba(47, 138, 79, ${alpha})`
+          : `rgba(194, 74, 61, ${alpha})`;
+        ctx.fillText(label, p.sx, p.sy - rise);
         continue;
       }
 
@@ -1872,6 +2202,23 @@
       ctx.arc(pB.sx, pB.sy, 5, 0, Math.PI * 2); ctx.fill();
       ctx.stroke();
     }
+
+    // Game-mode live cost preview — draws "$N" near the drag end so the
+    // player sees what this drag will cost before committing.
+    if (isGameMode() && startOk) {
+      const lenPx = Math.hypot(bPt.x - aPt.x, bPt.y - aPt.y);
+      const cost = roadCost(lenPx, !!d.isBridge);
+      const affordable = state.money >= cost;
+      const label = `$${cost}`;
+      ctx.font = `bold 14px -apple-system, "SF Pro Rounded", sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const tx = pB.sx + 14, ty = pB.sy - 14;
+      ctx.fillStyle = 'rgba(255, 250, 238, 0.92)';
+      ctx.fillText(label, tx + 1, ty + 1);
+      ctx.fillStyle = affordable ? '#2f8a4f' : '#c24a3d';
+      ctx.fillText(label, tx, ty);
+    }
   }
 
   // ================================================================
@@ -1903,28 +2250,45 @@
       Audio.setMuted(!Audio.muted);
       syncMuteButton();
     });
-    document.getElementById('btn-start').addEventListener('click', () => {
-      if (hasSavedCity()) {
-        try {
-          const raw = localStorage.getItem(SAVE_KEY);
-          const data = JSON.parse(raw);
-          const ok = loadState(data);
-          startGame({ fresh: !ok });  // if restore failed, seed as fresh
-        } catch (err) {
-          console.warn('restore failed:', err);
+    document.getElementById('btn-menu').addEventListener('click', backToMenu);
+
+    // Mode-pick on splash. Each mode has its own Continue / Start fresh
+    // pair; clicking Start either resumes a saved city of that mode or
+    // begins a fresh one.
+    document.querySelectorAll('.mode-start').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mode === 'game' ? MODE_GAME : MODE_SANDBOX;
+        state.mode = mode;
+        if (hasSavedCity(mode)) {
+          try {
+            const raw = localStorage.getItem(saveKeyFor(mode));
+            const data = JSON.parse(raw);
+            const ok = loadState(data);
+            if (!ok) buildLevel();
+            startGame({ fresh: !ok });
+          } catch (err) {
+            console.warn('restore failed:', err);
+            buildLevel();
+            startGame({ fresh: true });
+          }
+        } else {
           buildLevel();
           startGame({ fresh: true });
         }
-      } else {
+      });
+    });
+    document.querySelectorAll('.mode-fresh').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mode === 'game' ? MODE_GAME : MODE_SANDBOX;
+        state.mode = mode;
+        clearSavedCity(mode);
+        buildLevel();
         startGame({ fresh: true });
-      }
+      });
     });
-    document.getElementById('btn-reset').addEventListener('click', () => {
-      clearSavedCity();
-      buildLevel();
-      startGame({ fresh: true });
-    });
+
     document.getElementById('btn-retry').addEventListener('click', restart);
+    document.getElementById('btn-back-to-menu').addEventListener('click', backToMenu);
     document.getElementById('btn-undo').addEventListener('click', () => {
       const res = undoLast();
       if (!res.ok) return toast(res.reason || 'Nothing to undo');
@@ -2182,7 +2546,14 @@
     state.flowLastSampleAt = -1;
     state.flowLastCount = 0;
     state.flowPeak = 0;
-    // bestScore intentionally preserved across resets.
+    state.overloadTimer = 0;
+    state._warnedHalf = false;
+    // bestScore / bestMoney / bestSurvived intentionally preserved across resets.
+
+    // Reset run-only economy fields. bests stay in localStorage via save load.
+    state.money = STARTING_MONEY;
+    state.totalEarned = 0;
+    state.peakPeople = 0;
 
     for (const ep of LEVEL.entries) {
       const node = makeNode(ep.x, ep.y, { entry: ep.id });
@@ -2198,14 +2569,56 @@
     rebuildAdjacency();
   }
 
+  // Switch the HUD between sandbox (Score) and game (Money) hero stats.
+  function applyModeUI() {
+    const game = isGameMode();
+    document.querySelector('.stat.stat-money')?.classList.toggle('hidden', !game);
+    document.querySelector('.stat.stat-score')?.classList.toggle('hidden', game);
+    // Cost badges on every tool — visible in game mode only.
+    document.querySelectorAll('.tool-cost').forEach(el => {
+      el.classList.toggle('hidden', !game);
+    });
+    refreshToolCosts();
+  }
+
+  function refreshToolCosts() {
+    if (!isGameMode()) return;
+    const labels = {
+      road:       `$${COSTS.road.base}+`,
+      bridge:     `$${COSTS.bridge.base}+`,
+      oneway:     `Free`,
+      roundabout: `$${COSTS.roundabout}`,
+      house:      `$${COSTS.house}`,
+      shop:       `$${COSTS.shop}`,
+      mall:       `$${COSTS.mall}`,
+      erase:      `Free`
+    };
+    document.querySelectorAll('.tool[data-tool]').forEach(btn => {
+      const t = btn.dataset.tool;
+      const costEl = btn.querySelector('.tool-cost');
+      if (!costEl) return;
+      costEl.textContent = labels[t] || '';
+      // Mark unaffordable for fixed-cost tools.
+      const fixed = (t === 'house') ? COSTS.house
+                  : (t === 'shop')  ? COSTS.shop
+                  : (t === 'mall')  ? COSTS.mall
+                  : (t === 'roundabout') ? COSTS.roundabout
+                  : 0;
+      btn.classList.toggle('unaffordable', fixed > 0 && state.money < fixed);
+    });
+  }
+
   function startGame(opts = {}) {
     document.getElementById('splash').classList.add('hidden');
+    document.getElementById('gameover').classList.add('hidden');
     document.getElementById('hud').classList.remove('hidden');
     document.getElementById('toolbar').classList.remove('hidden');
     document.getElementById('paused-overlay').classList.remove('show');
     document.getElementById('btn-pause').textContent = '⏸';
     state.paused = false;
     state.started = true;
+    state.over = false;
+    applyModeUI();
     // Start audio (lazy init needs a user gesture — the Start click IS one).
     try {
       const savedMute = localStorage.getItem('traffic-flow:muted') === '1';
@@ -2229,6 +2642,7 @@
       for (let i = 0; i < 80; i++) stepSim(0.05);
     }
   }
+
   function restart() {
     document.getElementById('gameover').classList.add('hidden');
     buildLevel();
@@ -2237,13 +2651,58 @@
     state.jamMeter = 0;
     state.over = false;
     state.paused = false;
-    startGame();
+    startGame({ fresh: true });
   }
+
+  function backToMenu() {
+    // Pause and surface the splash for mode re-pick.
+    state.paused = true;
+    document.getElementById('hud').classList.add('hidden');
+    document.getElementById('toolbar').classList.add('hidden');
+    document.getElementById('gameover').classList.add('hidden');
+    document.getElementById('paused-overlay').classList.remove('show');
+    configureSplash();
+    document.getElementById('splash').classList.remove('hidden');
+  }
+
   function endGame() {
     if (state.over) return;
     state.over = true;
     state.paused = true;
     document.getElementById('go-score').textContent = state.delivered;
+    document.getElementById('gameover').classList.remove('hidden');
+  }
+
+  // Game-mode crash — sustained jam at max for OVERLOAD_TIME seconds.
+  function endGameCrash() {
+    if (state.over) return;
+    state.over = true;
+    state.paused = true;
+
+    if (state.totalEarned > state.bestMoney) state.bestMoney = state.totalEarned;
+    if (state.time > state.bestSurvived) state.bestSurvived = state.time;
+    scheduleSave();
+
+    document.getElementById('go-title').textContent = 'City Collapsed!';
+    document.getElementById('go-message').textContent = 'Traffic overwhelmed your city. Build smarter next time.';
+    document.getElementById('go-score').textContent = '$' + state.totalEarned;
+    document.getElementById('go-score-unit').textContent = 'earned';
+
+    const mins = Math.floor(state.time / 60);
+    const secs = Math.floor(state.time % 60);
+    const survived = `${mins}m ${secs.toString().padStart(2, '0')}s`;
+
+    const stats = document.getElementById('go-stats');
+    if (stats) {
+      stats.innerHTML = `
+        <li><span>Survived</span><b>${survived}</b></li>
+        <li><span>Peak people</span><b>${state.peakPeople}</b></li>
+        <li><span>Deliveries</span><b>${state.delivered}</b></li>
+        <li><span>Visits</span><b>${state.visits}</b></li>
+        <li><span>Best earned</span><b>$${state.bestMoney}</b></li>
+        <li><span>Longest run</span><b>${Math.floor(state.bestSurvived/60)}m ${(Math.floor(state.bestSurvived)%60).toString().padStart(2,'0')}s</b></li>
+      `;
+    }
     document.getElementById('gameover').classList.remove('hidden');
   }
   function syncMuteButton() {
@@ -2328,6 +2787,7 @@
   }
 
   function updateHud() {
+    // Sandbox: Score is hero. Game: Money is hero, Score hidden.
     document.getElementById('m-score').textContent = state.score;
     const bestEl = document.getElementById('m-best');
     if (bestEl) {
@@ -2335,18 +2795,26 @@
         ? `best ${state.bestScore}`
         : '';
     }
+    if (isGameMode()) {
+      const moneyEl = document.getElementById('m-money');
+      if (moneyEl) moneyEl.textContent = state.money;
+      const earnedEl = document.getElementById('m-money-earned');
+      if (earnedEl) earnedEl.textContent = state.totalEarned > 0 ? `earned $${state.totalEarned}` : '';
+      const stat = document.querySelector('.stat.stat-money');
+      if (stat) stat.classList.toggle('broke', state.money < 5);
+      // Refresh affordability (cheap — runs each frame but it's just classlist).
+      refreshToolCosts();
+    }
     const pop = state.blocks.reduce((n, b) => n + (b.type === 'house' ? 2 : 0), 0);
     document.getElementById('m-pop').textContent = pop;
     // Flow = average of the last 10 seconds of sparkline samples.
-    // Avoids the "cumulative-since-load spike" bug that showed 3692/min
-    // instantly after loading a saved city with lots of past deliveries.
     const recent = state.flowSamples.slice(-10);
     const ratePerMin = recent.length
       ? recent.reduce((a, b) => a + b, 0) / recent.length
       : 0;
     document.getElementById('m-flow').innerHTML = `${Math.round(ratePerMin)}<span class="u">/min</span>`;
     drawFlowSpark();
-    // Demand label updated by slider handler, not here.
+    // Jam fill — when overloading in game mode, switch to angry pulsing red.
     const fill = document.getElementById('jam-fill');
     fill.style.width = (state.jamMeter * 100).toFixed(0) + '%';
     fill.classList.toggle('warn', state.jamMeter > 0.35 && state.jamMeter < 0.7);
@@ -2455,16 +2923,15 @@
   // Boot
   // ================================================================
   function configureSplash() {
-    const saved = hasSavedCity();
-    const btnStart = document.getElementById('btn-start');
-    const btnReset = document.getElementById('btn-reset');
-    if (saved) {
-      btnStart.textContent = 'Continue';
-      btnReset.classList.remove('hidden');
-    } else {
-      btnStart.textContent = 'Start';
-      btnReset.classList.add('hidden');
-    }
+    // Each mode card shows Continue / Start fresh independently based on
+    // whether a save exists for that mode.
+    [MODE_SANDBOX, MODE_GAME].forEach(mode => {
+      const has = hasSavedCity(mode);
+      const startBtn = document.querySelector(`.mode-start[data-mode="${mode}"]`);
+      const freshBtn = document.querySelector(`.mode-fresh[data-mode="${mode}"]`);
+      if (startBtn) startBtn.textContent = has ? 'Continue' : 'Start';
+      if (freshBtn) freshBtn.classList.toggle('hidden', !has);
+    });
   }
 
   (() => {
