@@ -78,17 +78,32 @@
   const JAM_FAIL = 1.0;
 
   // Building types (Stage A.1 — RESEARCH.md). `points` = score awarded when
-  // a car visits this type of building.
+  // a car visits this type of building. `decorative: true` means the type
+  // doesn't dispatch or receive cars — just sits as scenery / bonus radius.
   const BUILDING_TYPES = {
     house: { dwell: 2.6, size: 1, label: 'House', points: 1 },
     shop:  { dwell: 2.0, size: 1, label: 'Shop',  points: 2 },
-    mall:  { dwell: 4.0, size: 2, label: 'Mall',  points: 3 }
+    mall:  { dwell: 4.0, size: 2, label: 'Mall',  points: 3 },
+    park:  { dwell: 0,   size: 1, label: 'Park',  points: 0, decorative: true }
   };
   const DELIVERY_POINTS = 1;   // car reaches an exit gate
 
+  // Park bonus — buildings within PARK_RADIUS get +PARK_BONUS_PER_PARK to
+  // their income multiplier, capped at PARK_BONUS_CAP. Parks within range
+  // of one another don't compound (you'd just spam them).
+  const PARK_RADIUS = 100;
+  const PARK_BONUS_PER_PARK = 0.25;
+  const PARK_BONUS_CAP = 0.75;
+
+  // Civic credits — earned every $500 of cumulative totalEarned. Each
+  // credit = one free park placement. M5 from make-it-a-game.md, simplest
+  // possible v1: only one investment type (Park), only one source ($500
+  // earned), no card-pick UI yet.
+  const CIVIC_CREDIT_INTERVAL = 500;
+
   // Build version — bumped on every ship; shown in the corner pill so the
   // user can see at a glance whether the page reloaded with a new build.
-  const VERSION = 'v28';
+  const VERSION = 'v29';
 
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
@@ -120,6 +135,7 @@
     house:      20,
     shop:       40,
     mall:       100,
+    park:       150,
     erase:      0
   };
 
@@ -128,8 +144,22 @@
     house: 1,
     shop:  3,
     mall:  8,
-    exit:  1
+    exit:  1,
+    park:  0
   };
+
+  // How much a building's income is multiplied by when within range of N
+  // parks. Capped at PARK_BONUS_CAP. Used in the visit/exit income code.
+  function parkBonusFor(b) {
+    let bonus = 0;
+    for (const p of state.blocks) {
+      if (p.type !== 'park') continue;
+      if (Math.hypot(p.x - b.x, p.y - b.y) <= PARK_RADIUS) {
+        bonus += PARK_BONUS_PER_PARK;
+      }
+    }
+    return Math.min(PARK_BONUS_CAP, bonus);
+  }
 
   // Crash / overload — game mode only. Sustained near-max jam ends the run.
   const OVERLOAD_JAM = 0.95;
@@ -248,6 +278,11 @@
     overloadTimer: 0,       // seconds spent above OVERLOAD_JAM
     bestMoney: 0,
     bestSurvived: 0,        // longest survived run, seconds
+
+    // Civic credits (M5) — one free park per $500 cumulative totalEarned.
+    civicCredits: 0,         // unspent credits
+    civicCreditsClaimed: 0,  // total ever issued (for milestone tracking)
+    toolbarHidden: false,    // user can collapse the toolbar on phone
 
     // Targets (M2). Tiered — each target has multiple escalating goals.
     // targetTiers stores the *current* tier index per target id.
@@ -440,7 +475,10 @@
       runTime: state.time,
       targetTiers: state.targetTiers,
       targetsCollapsed: state.targetsCollapsed,
-      earnSamples: state.earnSamples
+      earnSamples: state.earnSamples,
+      civicCredits: state.civicCredits,
+      civicCreditsClaimed: state.civicCreditsClaimed,
+      toolbarHidden: state.toolbarHidden
     };
   }
 
@@ -481,6 +519,9 @@
       state.earnLastSampleAt = -1;
       state.earnLastTotal = state.totalEarned;
       state._incomeSustainSec = 0;
+      state.civicCredits = data.civicCredits || 0;
+      state.civicCreditsClaimed = data.civicCreditsClaimed || 0;
+      state.toolbarHidden = !!data.toolbarHidden;
       rebuildAdjacency();
       return true;
     } catch (err) {
@@ -517,27 +558,20 @@
     };
   }
 
-  // Snap a drag end point axis-aligned relative to the start. If the drag is
-  // clearly horizontal or vertical (one axis > 1.4× the other) force the
-  // dominant axis only so roads come out perfectly straight. Otherwise snap
-  // to a 45° diagonal with a whole-grid step count. Keeps OCD-minded
-  // players happy and avoids the "slightly angled" road bug.
+  // Snap a drag end point to a strict horizontal or vertical line on the
+  // grid. v29 dropped the 45° diagonal escape hatch — it was the source of
+  // most of the "wonky" feel because a slightly diagonal drag would commit
+  // to a diagonal road, which then fed off-grid roundabouts and weird
+  // junctions. Pure axis-aligned roads keep every approach cardinal, which
+  // makes the rest of the geometry (junctions, roundabouts, plots) clean.
   function snapAxisAligned(startPt, endPt) {
     const dx = endPt.x - startPt.x;
     const dy = endPt.y - startPt.y;
     const adx = Math.abs(dx), ady = Math.abs(dy);
-    if (adx > ady * 1.4) {
+    if (adx >= ady) {
       return { x: Math.round(endPt.x / GRID) * GRID, y: startPt.y };
     }
-    if (ady > adx * 1.4) {
-      return { x: startPt.x, y: Math.round(endPt.y / GRID) * GRID };
-    }
-    // Diagonal — 45° locked to grid steps.
-    const steps = Math.max(1, Math.round(Math.max(adx, ady) / GRID));
-    return {
-      x: startPt.x + (Math.sign(dx) || 1) * steps * GRID,
-      y: startPt.y + (Math.sign(dy) || 1) * steps * GRID
-    };
+    return { x: startPt.x, y: Math.round(endPt.y / GRID) * GRID };
   }
 
   function findNearestEdgePoint(x, y, snapR) {
@@ -759,10 +793,17 @@
   function placeBlock(wx, wy, type = 'shop') {
     const spec = BUILDING_TYPES[type] || BUILDING_TYPES.shop;
 
-    // Game mode — check funds first so we don't mutate the network only to bail.
+    // Game mode — check funds first so we don't mutate the network only to
+    // bail. Parks are free if you have an unspent civic credit.
     let cost = 0;
+    let usedCivicCredit = false;
     if (isGameMode()) {
-      cost = COSTS[type] || 0;
+      if (type === 'park' && state.civicCredits > 0) {
+        cost = 0;
+        usedCivicCredit = true;
+      } else {
+        cost = COSTS[type] || 0;
+      }
       if (state.money < cost) {
         return { ok: false, reason: `Need $${cost} — got $${state.money}` };
       }
@@ -787,9 +828,9 @@
     if (node.entry) return { ok: false, reason: 'Can\'t place on a gate' };
     if (blockedNodeIds.has(node.id)) return { ok: false, reason: 'Building already here' };
 
-    // Visual / footprint check — keep buildings at least one grid-step apart
-    // so a new house never overlaps an existing one's drawn plot.
-    const MIN_BLOCK_DIST = 50;
+    // Visual / footprint check — keep buildings at exactly one grid-step
+    // apart minimum, so plots tile cleanly without overlapping.
+    const MIN_BLOCK_DIST = GRID - 4;   // 56 — adjacent grid cells (60 apart) pass
     for (const b of state.blocks) {
       if (Math.hypot(b.x - node.x, b.y - node.y) < MIN_BLOCK_DIST) {
         return { ok: false, reason: 'Too close to another building' };
@@ -807,13 +848,17 @@
     };
     state.blocks.push(block);
     rebuildAdjacency();
-    if (isGameMode() && cost > 0) {
-      state.money -= cost;
-      state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'spend', amount: cost });
+    if (isGameMode()) {
+      if (usedCivicCredit) {
+        state.civicCredits -= 1;
+      } else if (cost > 0) {
+        state.money -= cost;
+        state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'spend', amount: cost });
+      }
     }
-    state.undoStack.push({ type: 'block', blockId: block.id, nodeId: node.id, cost });
+    state.undoStack.push({ type: 'block', blockId: block.id, nodeId: node.id, cost, usedCivicCredit });
     scheduleSave();
-    return { ok: true, cost };
+    return { ok: true, cost, usedCivicCredit };
   }
 
   function undoLast() {
@@ -831,7 +876,10 @@
     if (action.type === 'block') {
       state.blocks = state.blocks.filter(b => b.id !== action.blockId);
       state.cars = state.cars.filter(c => c.blockId !== action.blockId);
-      if (isGameMode() && action.cost) state.money += action.cost;
+      if (isGameMode()) {
+        if (action.usedCivicCredit) state.civicCredits += 1;
+        else if (action.cost) state.money += action.cost;
+      }
       scheduleSave();
       return { ok: true, what: 'block', refund: action.cost || 0 };
     }
@@ -845,7 +893,7 @@
     return d;
   }
 
-  function makeRoundabout(nodeId, radius = 50) {
+  function makeRoundabout(nodeId, radius = 60) {
     const node = state.nodes.get(nodeId);
     if (!node) return { ok: false, reason: 'no node' };
 
@@ -1350,12 +1398,17 @@
             state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'visit' });
             // In game mode, the building EARNS dollars for the city. The
             // floating popup shows $earnings instead of points so the
-            // player feels the income loop directly.
+            // player feels the income loop directly. Park bonus stacks on
+            // top of the base income — every park within PARK_RADIUS adds
+            // PARK_BONUS_PER_PARK to the multiplier.
             if (isGameMode()) {
-              const earn = INCOME[block.type] || 0;
+              const baseEarn = INCOME[block.type] || 0;
+              const bonus = parkBonusFor(block);
+              const earn = Math.round(baseEarn * (1 + bonus));
               state.money += earn;
               state.totalEarned += earn;
               state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'earn', amount: earn });
+              checkCivicCredits();
             } else {
               state.effects.push({ x: block.x, y: block.y, startTime: state.time, kind: 'points', points: pts });
             }
@@ -1371,10 +1424,14 @@
           if (exit) {
             state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'deliver' });
             if (isGameMode()) {
-              const earn = INCOME.exit || 0;
+              // Park bonus at exits — uses the gate position so a park near
+              // the gate boosts every car that completes a delivery there.
+              const bonus = parkBonusFor(exit);
+              const earn = Math.round((INCOME.exit || 0) * (1 + bonus));
               state.money += earn;
               state.totalEarned += earn;
               state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'earn', amount: earn });
+              checkCivicCredits();
             } else {
               state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'points', points: DELIVERY_POINTS });
             }
@@ -1824,10 +1881,30 @@
       const sizeMul = b.size === 2 ? 1.5 : 1;
 
       // Pressure ring — Mini Metro-style arc behind the building. Fills up
-      // based on how many cars are heading here right now.
+      // based on how many cars are heading here right now. Decorative
+      // blocks (parks) skip this — they have no incoming car concept.
+      const buildingSpec = BUILDING_TYPES[type];
+      const isDecorative = buildingSpec && buildingSpec.decorative;
       const incoming = b.incoming || 0;
       const capacity = b.size === 2 ? 5 : 3;   // Mall handles more load
-      const pressure = Math.min(1, incoming / capacity);
+      const pressure = isDecorative ? 0 : Math.min(1, incoming / capacity);
+
+      // Park bonus halo — soft green circle showing the +25% income radius.
+      if (type === 'park') {
+        const haloR = PARK_RADIUS * s;
+        ctx.fillStyle = 'rgba(120, 175, 90, 0.07)';
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, haloR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(80, 130, 60, 0.18)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, haloR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
       if (pressure > 0.02) {
         const ringR = 34 * s * sizeMul;
         const ringW = Math.max(3, 4 * s);
@@ -1862,8 +1939,64 @@
 
       if (type === 'house') drawHouse(p.sx, p.sy, s, b.id);
       else if (type === 'mall') drawMall(p.sx, p.sy, s);
+      else if (type === 'park') drawPark(p.sx, p.sy, s, b.id);
       else drawShop(p.sx, p.sy, s, b.id);
     }
+  }
+
+  // Park — a small green square with a few trees, a bench, and a path. The
+  // visual emphasises "this is the city's lung" so neighbours feel like
+  // they're getting the bonus they actually do.
+  function drawPark(cx, cy, s, seed = 0) {
+    // Wider plot than house/shop — parks are SUPPOSED to feel a bit lavish.
+    const plotR = 28 * s;
+    ctx.fillStyle = '#9bbf6f';
+    ctx.beginPath();
+    roundedRect(cx - plotR, cy - plotR, plotR * 2, plotR * 2, plotR * 0.22);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(60, 80, 50, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    // Light path winding through (cream colour, soft).
+    ctx.strokeStyle = 'rgba(244, 234, 213, 0.75)';
+    ctx.lineWidth = 4 * s;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - plotR + 5 * s, cy + 6 * s);
+    ctx.quadraticCurveTo(cx, cy - 4 * s, cx + plotR - 5 * s, cy + 6 * s);
+    ctx.stroke();
+    // Three trees at varied positions. Larger / fluffier than the plot
+    // sprigs other buildings use.
+    const trees = [
+      { dx: -14, dy: -10, r: 8 },
+      { dx:  12, dy: -12, r: 9 },
+      { dx:   2, dy:  12, r: 7 }
+    ];
+    for (const t of trees) {
+      const tx = cx + t.dx * s, ty = cy + t.dy * s;
+      // Trunk
+      ctx.fillStyle = '#5a3a22';
+      ctx.fillRect(tx - 1.5 * s, ty + t.r * s * 0.4, 3 * s, t.r * s * 0.7);
+      // Canopy
+      ctx.fillStyle = '#3e7a38';
+      ctx.beginPath();
+      ctx.arc(tx, ty, t.r * s, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(30, 50, 30, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      // Highlight
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
+      ctx.beginPath();
+      ctx.arc(tx - t.r * s * 0.35, ty - t.r * s * 0.35, t.r * s * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Tiny bench (wood seat)
+    ctx.fillStyle = '#6b4a2f';
+    ctx.fillRect(cx - 6 * s, cy + 13 * s, 12 * s, 2.5 * s);
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx - 6 * s, cy + 13 * s, 12 * s, 2.5 * s);
   }
 
   const HOUSE_BODY = ['#f0dbb2', '#ecd1a7', '#e9c899', '#eed7b3', '#e2c29a', '#f2e0ba'];
@@ -2458,6 +2591,13 @@
       });
     }
 
+    // Hide / show toolbar — important on phone where the bar takes the
+    // bottom strip. State is persisted per-mode.
+    const hideBtn = document.getElementById('btn-hide-toolbar');
+    const showBtn = document.getElementById('btn-show-toolbar');
+    if (hideBtn) hideBtn.addEventListener('click', () => setToolbarHidden(true));
+    if (showBtn) showBtn.addEventListener('click', () => setToolbarHidden(false));
+
     // Mode-pick on splash. Each mode has its own Continue / Start fresh
     // pair; clicking Start either resumes a saved city of that mode or
     // begins a fresh one.
@@ -2522,6 +2662,7 @@
       if (e.key === '6') setTool('shop');
       if (e.key === '7') setTool('mall');
       if (e.key === '8') setTool('erase');
+      if (e.key === '9') setTool('park');
       if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
         document.getElementById('btn-undo').click();
         e.preventDefault();
@@ -2709,17 +2850,18 @@
       toast('Roundabout built');
     }
 
-    if (isTap && (state.tool === 'house' || state.tool === 'shop' || state.tool === 'mall')) {
+    if (isTap && (state.tool === 'house' || state.tool === 'shop' || state.tool === 'mall' || state.tool === 'park')) {
       const world = s2w(p.startX, p.startY);
-      // If not snapping to existing network, fall back to the nearest grid point.
-      const sn = snapRadii();
-      const nodeHit = findNearestNode(world.x, world.y, sn.node * 1.3);
-      const edgeHit = !nodeHit ? findNearestEdgePoint(world.x, world.y, sn.edge * 1.3) : null;
-      const pt = (nodeHit || edgeHit) ? world : snapToGrid(world.x, world.y);
+      // ALWAYS snap to grid first — the player taps anywhere, the building
+      // lands on a clean grid intersection. Inside placeBlock the snap-to-
+      // road logic still kicks in, but only if there's a road within snap
+      // distance of the grid-aligned point.
+      const pt = snapToGrid(world.x, world.y);
       const res = placeBlock(pt.x, pt.y, state.tool);
       if (!res.ok) return toast(res.reason);
       const label = BUILDING_TYPES[state.tool].label;
-      toast(`${label} placed`);
+      if (res.usedCivicCredit) toast(`Free ${label} placed (civic credit)`);
+      else toast(`${label} placed`);
     }
   }
 
@@ -2765,6 +2907,8 @@
     state.earnLastSampleAt = -1;
     state.earnLastTotal = 0;
     state._incomeSustainSec = 0;
+    state.civicCredits = 0;
+    state.civicCreditsClaimed = 0;
 
     for (const ep of LEVEL.entries) {
       const node = makeNode(ep.x, ep.y, { entry: ep.id });
@@ -2780,6 +2924,13 @@
     rebuildAdjacency();
   }
 
+  function setToolbarHidden(hidden) {
+    state.toolbarHidden = !!hidden;
+    document.getElementById('toolbar')?.classList.toggle('collapsed', hidden);
+    document.getElementById('btn-show-toolbar')?.classList.toggle('hidden', !hidden);
+    scheduleSave();
+  }
+
   // Switch the HUD between sandbox (Score) and game (Money) hero stats.
   function applyModeUI() {
     const game = isGameMode();
@@ -2790,6 +2941,25 @@
       el.classList.toggle('hidden', !game);
     });
     refreshToolCosts();
+  }
+
+  // Civic-credit issuer — call after any income event in game mode. Issues
+  // a credit for every CIVIC_CREDIT_INTERVAL of cumulative earnings reached.
+  function checkCivicCredits() {
+    if (!isGameMode()) return;
+    const earned = Math.floor(state.totalEarned / CIVIC_CREDIT_INTERVAL);
+    if (earned > state.civicCreditsClaimed) {
+      const fresh = earned - state.civicCreditsClaimed;
+      state.civicCredits += fresh;
+      state.civicCreditsClaimed = earned;
+      toast(`🌳 Civic dividend! Free Park unlocked`, 2400);
+      // Cash sparkle as a small celebration.
+      state.effects.push({
+        x: LOGICAL_W / 2, y: 220,
+        startTime: state.time, kind: 'deliver'
+      });
+      scheduleSave();
+    }
   }
 
   // Target progress + hit detection. Tiered — when you cross the current
@@ -2885,6 +3055,9 @@
 
   function refreshToolCosts() {
     if (!isGameMode()) return;
+    // Park's cost label flips between "$150" and "FREE" depending on
+    // whether the player has an unspent civic credit.
+    const parkLabel = state.civicCredits > 0 ? 'FREE' : `$${COSTS.park}`;
     const labels = {
       road:       `$${COSTS.road.base}+`,
       bridge:     `$${COSTS.bridge.base}+`,
@@ -2893,6 +3066,7 @@
       house:      `$${COSTS.house}`,
       shop:       `$${COSTS.shop}`,
       mall:       `$${COSTS.mall}`,
+      park:       parkLabel,
       erase:      `Free`
     };
     document.querySelectorAll('.tool[data-tool]').forEach(btn => {
@@ -2900,13 +3074,22 @@
       const costEl = btn.querySelector('.tool-cost');
       if (!costEl) return;
       costEl.textContent = labels[t] || '';
-      // Mark unaffordable for fixed-cost tools.
+      // Mark unaffordable for fixed-cost tools (park bypasses if free).
       const fixed = (t === 'house') ? COSTS.house
                   : (t === 'shop')  ? COSTS.shop
                   : (t === 'mall')  ? COSTS.mall
                   : (t === 'roundabout') ? COSTS.roundabout
+                  : (t === 'park')  ? (state.civicCredits > 0 ? 0 : COSTS.park)
                   : 0;
       btn.classList.toggle('unaffordable', fixed > 0 && state.money < fixed);
+      // Civic-credit badge on the Park tool.
+      if (t === 'park') {
+        const badge = btn.querySelector('.tool-credit-badge');
+        if (badge) {
+          badge.textContent = state.civicCredits;
+          badge.classList.toggle('hidden', state.civicCredits <= 0);
+        }
+      }
     });
   }
 
@@ -2921,6 +3104,7 @@
     state.started = true;
     state.over = false;
     applyModeUI();
+    setToolbarHidden(state.toolbarHidden);
     // Start audio (lazy init needs a user gesture — the Start click IS one).
     try {
       const savedMute = localStorage.getItem('traffic-flow:muted') === '1';
@@ -2967,6 +3151,7 @@
     document.getElementById('toolbar').classList.add('hidden');
     document.getElementById('targets')?.classList.add('hidden');
     document.getElementById('gameover').classList.add('hidden');
+    document.getElementById('btn-show-toolbar')?.classList.add('hidden');
     document.getElementById('paused-overlay').classList.remove('show');
     configureSplash();
     document.getElementById('splash').classList.remove('hidden');

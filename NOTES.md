@@ -101,6 +101,26 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-26 — v29 (grid pass + Parks/civic credits + toolbar hide)** —
+  Big aesthetic / playability pass. **Roads are strictly axis-aligned**
+  now — the 45° diagonal escape hatch is gone, every drag commits to
+  horizontal or vertical. Combined with **roundabout radius 50 → 60** and
+  **building placement always grid-snapped first**, junctions /
+  roundabouts / building rows finally tile cleanly. **Park** is a new
+  building type — green plot with three trees, a winding cream path, a
+  bench. Costs $150 normally OR free with a civic credit. Acts as a
+  passive bonus: any building (or exit gate) within 100px of a park
+  earns +25% income on visits, stacking up to +75% from multiple parks.
+  Visualised as a soft dashed circle around the park so you can plan
+  placements.  **Civic credits (M5 v1)** — every $500 of cumulative
+  earnings issues one credit, surfaced in a toast and a green badge on
+  the Park tool. Spend the credit by placing a park — that's the closed
+  reward loop the design doc has been asking for. **Toolbar hide /
+  show** — chevron at the right of the bar collapses it to a small
+  "Build" pill that re-opens it; great for phone where the bar took the
+  whole bottom strip. Also: **mobile toolbar now scrolls horizontally**
+  instead of cramping all 11 tools into 360px. Persisted: collapse
+  state, civic credits, toolbar-hidden flag, all per-mode.
 - **2026-04-26 — v28 (tiered goals + house gardens + collapsible goals panel)** —
   Goals now **tier up** — when you hit one, the bar resets and the
   next-tier goal slides in. Earn $500 → $2,000 → $10,000 → $50,000 →

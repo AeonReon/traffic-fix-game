@@ -157,6 +157,14 @@
       <div class="tool-label">Mall</div>
       <div class="tool-cost hidden"></div>
     </button>
+    <button class="tool" data-tool="park" title="Park (free if you have a civic credit)">
+      <svg class="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round">
+        <path d="M12 3 L17 11 L14 11 L17 16 L13 16 L13 21 L11 21 L11 16 L7 16 L10 11 L7 11 Z"/>
+      </svg>
+      <div class="tool-label">Park</div>
+      <div class="tool-cost hidden"></div>
+      <div class="tool-credit-badge hidden">0</div>
+    </button>
     <button class="tool" data-tool="erase" title="Erase">
       <svg class="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
         <line x1="6" y1="6" x2="18" y2="18"/>
@@ -172,7 +180,21 @@
       </svg>
       <div class="tool-label">Undo</div>
     </button>
+    <button id="btn-hide-toolbar" class="tool tool-aux" title="Hide toolbar">
+      <svg class="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 14 12 20 18 14"/>
+        <polyline points="6 8 12 14 18 8"/>
+      </svg>
+      <div class="tool-label">Hide</div>
+    </button>
   </div>
+
+  <button id="btn-show-toolbar" class="show-toolbar hidden" title="Show toolbar">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="6 16 12 10 18 16"/>
+    </svg>
+    <span>Build</span>
+  </button>
 
   <div id="gameover" class="overlay hidden">
     <div class="splash-card">
@@ -229,7 +251,7 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <div id="version-pill" title="Build version">v28</div>
+  <div id="version-pill" title="Build version">v29</div>
 </div>
 
 <script src="js/game.js"></script>

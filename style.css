@@ -369,8 +369,54 @@ html, body {
 .tool[data-tool="house"]      { border-color: rgba(176, 133, 69, 0.48); }
 .tool[data-tool="shop"]       { border-color: rgba(199, 74, 61, 0.38); }
 .tool[data-tool="mall"]       { border-color: rgba(74, 115, 165, 0.42); }
+.tool[data-tool="park"]       { border-color: rgba(80, 130, 60, 0.42); }
+.tool[data-tool="park"]       .tool-icon { color: #4a8a4a; }
 .tool[data-tool="erase"]      { border-color: rgba(194, 74, 61, 0.38); }
 #btn-undo                     { border-color: rgba(108, 115, 128, 0.35); }
+#btn-hide-toolbar             { border-color: rgba(108, 115, 128, 0.35); }
+#btn-hide-toolbar             .tool-icon { color: var(--ink-soft); }
+
+/* Civic credit badge — small green pill on the Park tool, shows the
+   number of unspent credits. Hidden when there are none. */
+.tool { position: relative; }
+.tool-credit-badge {
+  position: absolute;
+  top: -6px; right: -6px;
+  min-width: 18px; height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #4fa16a;
+  color: white;
+  font-size: 11px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 4px rgba(42, 47, 60, 0.2);
+  pointer-events: none;
+}
+.tool-credit-badge.hidden { display: none; }
+
+/* Toolbar hide / show. When toolbar is hidden, a small floating Build pill
+   sits where the toolbar was, with a chevron-up icon. Tap to expand. */
+#toolbar.collapsed { display: none; }
+.show-toolbar {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 14px;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(255, 252, 245, 0.96);
+  border: 1.5px solid rgba(42, 47, 60, 0.12);
+  border-radius: 999px;
+  padding: 9px 16px;
+  font-size: 13px; font-weight: 700;
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  z-index: 10;
+}
+.show-toolbar:hover { background: white; box-shadow: var(--shadow); }
+.show-toolbar.hidden { display: none; }
+.show-toolbar svg { width: 18px; height: 18px; }
 .tool-label {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
   max-width: 100%;
@@ -571,11 +617,18 @@ html, body {
   #toolbar {
     left: 10px; right: 10px;
     transform: none;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 4px; padding: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
   }
+  #toolbar::-webkit-scrollbar { display: none; }
   .tool {
-    flex: 1; min-width: 0;
+    flex: 0 0 56px;
+    min-width: 56px;
     padding: 10px 4px;
     min-height: 58px;
   }
