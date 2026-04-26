@@ -103,7 +103,7 @@
 
   // Build version — bumped on every ship; shown in the corner pill so the
   // user can see at a glance whether the page reloaded with a new build.
-  const VERSION = 'v30';
+  const VERSION = 'v31';
 
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
@@ -823,7 +823,11 @@
     let node;
     if (nodeSnap) node = nodeSnap;
     else if (edgeSnap) node = splitEdgeAtPoint(edgeSnap.edge, edgeSnap.x, edgeSnap.y);
-    else node = makeNode(wx, wy);
+    else if (type === 'park') node = makeNode(wx, wy);
+    // v31 — non-park buildings need a road within snap range. Otherwise the
+    // building would be unreachable: cars can't visit, no income, dead pixel.
+    // Reject early so the player learns "build the road first".
+    else return { ok: false, reason: 'Place on or next to a road' };
 
     if (node.entry) return { ok: false, reason: 'Can\'t place on a gate' };
     if (blockedNodeIds.has(node.id)) return { ok: false, reason: 'Building already here' };
@@ -1105,9 +1109,21 @@
   function currentSpawnInterval() {
     const m = state.demandMult;
     if (m < 0.02) return Infinity;  // paused
-    // Slow ramp: from RAMP_START × m at t=0 up to 1 × m at RAMP_TIME.
+    // v31 — external traffic (edge gates) is now driven by the city's
+    // attractiveness, not a fixed clock. With NO shops or malls there's
+    // nothing for visiting cars to do, so we spawn nothing. Each shop = 1,
+    // each mall = 2 (matches dispatch weights). Houses don't count here —
+    // they generate their *own* traffic via tryDispatchFromHouse. Sqrt
+    // scaling: 1 destination → slow trickle; 16 destinations → 4× faster.
+    let destWeight = 0;
+    for (const b of state.blocks) {
+      if (b.type === 'shop') destWeight += 1;
+      else if (b.type === 'mall') destWeight += 2;
+    }
+    if (destWeight === 0) return Infinity;
     const ramp = Math.min(1, RAMP_START + (1 - RAMP_START) * (state.time / RAMP_TIME));
-    return BASE_SPAWN_INTERVAL / (m * ramp);
+    // 16s/gate at destWeight=1; 8s/gate at 4; 4s/gate at 16.
+    return 16 / (m * ramp * Math.sqrt(destWeight));
   }
 
   // A gate's queue should only fill when it has at least one outgoing road.
@@ -2095,10 +2111,70 @@
   }
 
   function drawHouse(cx, cy, s, seed = 0) {
-    // Garden plot first — claims the building's visual footprint so the
-    // player intuitively knows how much space a house occupies.
-    drawPlot(cx, cy, 28 * s, '#cbd9a4',
-             ['#5b8a55', '#7da966', '#a8c97e', '#bfd690'], seed);
+    // v31 — bigger garden so houses feel like proper residences with room
+    // to breathe, not crammed-together blocks. Plot is ~70 world units
+    // wide; adjacent grid placements (60 apart) blend their lawns into
+    // continuous green which reads as a neighbourhood rather than a wall.
+    const plotR = 35 * s;
+    // Soft hedge-darker base under the lawn for depth.
+    ctx.fillStyle = '#9bbf6d';
+    ctx.beginPath();
+    roundedRect(cx - plotR, cy - plotR, plotR * 2, plotR * 2, plotR * 0.22);
+    ctx.fill();
+    // Bright lawn on top, slightly inset.
+    ctx.fillStyle = '#bfd690';
+    ctx.beginPath();
+    roundedRect(cx - plotR + 2 * s, cy - plotR + 2 * s, plotR * 2 - 4 * s, plotR * 2 - 4 * s, plotR * 0.18);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(60, 90, 50, 0.32)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Grass texture patches (varied tones) — seeded so each house looks
+    // unique but stable across reloads.
+    const grasses = ['#a8c97e', '#9fc275', '#b6cf85', '#92ba66'];
+    for (let i = 0; i < 7; i++) {
+      const px = cx + (seedHash(seed * 13 + i) - 0.5) * plotR * 1.6;
+      const py = cy + (seedHash(seed * 19 + i + 3) - 0.5) * plotR * 1.6;
+      if (Math.hypot(px - cx, py - cy) < 18 * s) continue;  // away from house body
+      ctx.fillStyle = grasses[i % grasses.length];
+      ctx.beginPath();
+      ctx.arc(px, py, plotR * 0.085, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Bright flower clusters — 4 colours, seeded positions. Buildings only
+    // get flowers in the corners of their plot so the eye focuses on the
+    // house body itself.
+    const flowers = ['#e8a857', '#e85871', '#a850c8', '#f5d040', '#ee85a5'];
+    for (let i = 0; i < 5; i++) {
+      const px = cx + (seedHash(seed * 23 + i + 7) - 0.5) * plotR * 1.7;
+      const py = cy + (seedHash(seed * 29 + i + 11) - 0.5) * plotR * 1.7;
+      if (Math.hypot(px - cx, py - cy) < 22 * s) continue;
+      ctx.fillStyle = flowers[i % flowers.length];
+      ctx.beginPath();
+      ctx.arc(px, py, plotR * 0.06, 0, Math.PI * 2);
+      ctx.fill();
+      // Tiny green stem
+      ctx.fillStyle = '#5b8a55';
+      ctx.fillRect(px - 0.5 * s, py + plotR * 0.06, 1 * s, 2 * s);
+    }
+
+    // Stone path from south plot edge up to the door — gives the house a
+    // sense of arrival.
+    ctx.strokeStyle = 'rgba(220, 210, 180, 0.85)';
+    ctx.lineWidth = 4 * s;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + plotR - 2 * s);
+    ctx.lineTo(cx, cy + 16 * s);
+    ctx.stroke();
+
+    // Soft grounding shadow under the house body.
+    ctx.fillStyle = 'rgba(30, 35, 50, 0.14)';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 16 * s, 22 * s, 5 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
 
     const w = 44 * s, h = 38 * s;
     const bodyTop = cy - h / 2 + 8 * s;
@@ -2933,11 +3009,23 @@
 
     if (isTap && (state.tool === 'house' || state.tool === 'shop' || state.tool === 'mall' || state.tool === 'park')) {
       const world = s2w(p.startX, p.startY);
-      // ALWAYS snap to grid first — the player taps anywhere, the building
-      // lands on a clean grid intersection. Inside placeBlock the snap-to-
-      // road logic still kicks in, but only if there's a road within snap
-      // distance of the grid-aligned point.
-      const pt = snapToGrid(world.x, world.y);
+      // v31 — road-first placement so non-park buildings always land on a
+      // road, intuitively. Search wider (1 grid step) than the placeBlock
+      // internal snap radius so a tap up to ~60 world units from a road
+      // still snaps onto it. Only parks fall through to a clean grid-snap
+      // (since they're decorative and don't need road access).
+      const blockedIds = new Set(state.blocks.map(b => b.nodeId));
+      const nodeNear = findNearestNode(world.x, world.y, GRID);
+      const usableNode = (nodeNear && !blockedIds.has(nodeNear.id) && !nodeNear.entry) ? nodeNear : null;
+      const edgeNear = !usableNode ? findNearestEdgePoint(world.x, world.y, GRID) : null;
+      let pt;
+      if (usableNode) pt = { x: usableNode.x, y: usableNode.y };
+      // For edge snaps, grid-align the point so buildings on a road still
+      // sit on grid intersections. Axis-aligned roads have grid intersections
+      // along their length so this works cleanly.
+      else if (edgeNear) pt = snapToGrid(edgeNear.x, edgeNear.y);
+      else if (state.tool === 'park') pt = snapToGrid(world.x, world.y);
+      else return toast('Place on or next to a road');
       const res = placeBlock(pt.x, pt.y, state.tool);
       if (!res.ok) return toast(res.reason);
       const label = BUILDING_TYPES[state.tool].label;

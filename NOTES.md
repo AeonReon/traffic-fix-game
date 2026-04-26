@@ -101,6 +101,27 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-26 — v31 (city-driven traffic + road-required placement + bigger gardens)** —
+  Three big changes that make the economic loop click. **Edge-gate
+  spawn rate is now driven by destinations** — with no shops or malls,
+  gates spawn nothing at all (cars from gates have no reason to come).
+  Each shop counts 1, each mall counts 2. Sqrt scaling so growth is
+  graceful: 1 destination → 16s/gate, 4 → 8s, 16 → 4s. Houses still
+  generate their own internal traffic separately, so the *very* early
+  game (1 house, 0 shops) has a few cars wandering to exits. The loop
+  is finally honest: more houses → more residents → more traffic; more
+  shops → more visitors come to spend; balance both → bigger income.
+  **Buildings must be placed on or near a road** — non-park placements
+  reject if there's no road within one grid step of the tap. Park
+  remains decorative-anywhere. Tap handler now searches for a road
+  within GRID range first, then grid-snaps the road point so buildings
+  end up on clean intersections. **House gardens are now ~70 world
+  units wide** (was 56) — soft hedge border, bright lawn, multi-tone
+  grass texture patches, 5 colourful flower clusters with little
+  green stems, and a stone path leading from the south edge of the
+  plot to the door. Adjacent grid-step placements blend their lawns
+  into a continuous green so a row of houses reads as a *neighbourhood*
+  with shared greenery, not a wall.
 - **2026-04-26 — v30 (axis-aligned snaps + 8-way roundabouts + proper bridges)** —
   Three v29 follow-ups. **Axis-aligned end snapping** — when you drag from
   one row to a parallel row, the end-snap candidate search now happens
