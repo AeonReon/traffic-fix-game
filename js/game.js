@@ -54,9 +54,10 @@
       { id: 'W', x:   60, y: 1140, side: 'W', label: 'W' },
       { id: 'E', x: 1740, y: 1140, side: 'E', label: 'E' }
     ],
-    starterRoads: [
-      { a: { x: 60, y: 1140 }, b: { x: 1740, y: 1140 } }
-    ]
+    // No starter road. The map opens with just the four edge gates so the
+    // player's first move is always to draw a road from a gate. Gives the
+    // empty-canvas-feel that "I am building this from scratch."
+    starterRoads: []
   };
 
   // Cars and physics (pixel units, pixels per second)
@@ -103,7 +104,7 @@
 
   // Build version — bumped on every ship; shown in the corner pill so the
   // user can see at a glance whether the page reloaded with a new build.
-  const VERSION = 'v32';
+  const VERSION = 'v33';
 
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
@@ -138,6 +139,32 @@
     park:       150,
     erase:      0
   };
+
+  // Per-instance cost scaling. Each existing building of a given type bumps
+  // the next one's cost by COST_SCALING[type] dollars. Without this, late-
+  // game money becomes effectively unlimited because income compounds with
+  // city size while costs stay flat — the player stops thinking about
+  // resources entirely. Linear scaling keeps the early game friendly
+  // (first house is still $20) while making the 10th mall a real decision.
+  //   house:      20,  30,  40,  50,  60,  70,  ...   (+$10 each)
+  //   shop:       40,  65,  90, 115, 140, 165,  ...   (+$25 each)
+  //   mall:      100, 175, 250, 325, 400, 475,  ...   (+$75 each)
+  //   park:      150, 200, 250, ...                   (free with civic credit)
+  const COST_SCALING = {
+    house: 10,
+    shop:  25,
+    mall:  75,
+    park:  50
+  };
+
+  function buildingCostFor(type) {
+    const base = COSTS[type];
+    if (typeof base !== 'number') return base;
+    const scale = COST_SCALING[type] || 0;
+    if (!scale) return base;
+    const n = state.blocks.filter(b => b.type === type).length;
+    return base + n * scale;
+  }
 
   // Income per car-event in game mode. Sandbox uses score points only.
   const INCOME = {
@@ -836,7 +863,7 @@
         cost = 0;
         usedCivicCredit = true;
       } else {
-        cost = COSTS[type] || 0;
+        cost = buildingCostFor(type);
       }
       if (state.money < cost) {
         return { ok: false, reason: `Need $${cost} — got $${state.money}` };
@@ -1039,10 +1066,41 @@
 
     // Remove the original centre node.
     state.nodes.delete(nodeId);
-    // Kick any car whose route goes through the modified edges — rebuild fresh.
-    const modifiedIds = new Set(touching.map(e => e.id));
-    state.cars = state.cars.filter(c => !c.path.some(e => modifiedIds.has(e.id)));
     rebuildAdjacency();
+
+    // Re-route cars whose path touches the now-rewired approaches. Dropping
+    // them wholesale (the old behaviour) made roundabouts an exploit: jamming
+    // up? plonk a roundabout in the middle of the queue, every queued car
+    // vanishes, jam meter empties, score-discipline broken. Now traffic
+    // persists and gets re-routed onto the new ring.
+    const modifiedIds = new Set(touching.map(e => e.id));
+    for (const car of state.cars) {
+      if (!car.path.some(e => modifiedIds.has(e.id))) continue;
+      const curEdge = car.path[car.pathIdx];
+      // Approach edges shrank by `radius` on the junction-side end. Clamp pos
+      // so the car never sits past its (now-shorter) shape.
+      if (modifiedIds.has(curEdge.id)) {
+        car.pos = Math.min(car.pos, Math.max(0, curEdge.length - 1));
+      }
+      const targetNodeId = car.destKind === 'block'
+        ? state.blocks.find(b => b.id === car.blockId)?.nodeId
+        : (state.entries.find(e => e.id === car.sinkEntryId) || {}).nodeId;
+      if (targetNodeId == null) {
+        car.path = [curEdge];
+        car.pathIdx = 0;
+        car.needsReroute = true;
+        continue;
+      }
+      const onward = routeFromNode(curEdge.to, targetNodeId);
+      if (!onward) {
+        car.path = [curEdge];
+        car.pathIdx = 0;
+        car.needsReroute = true;
+        continue;
+      }
+      car.path = [curEdge, ...onward];
+      car.pathIdx = 0;
+    }
     if (isGameMode()) {
       state.money -= COSTS.roundabout;
       state.effects.push({ x: node.x, y: node.y, startTime: state.time, kind: 'spend', amount: COSTS.roundabout });
@@ -1480,10 +1538,12 @@
           }
           state.visits++;
           if (state.score > state.bestScore) state.bestScore = state.score;
+          checkRecordBreak();
         } else {
           state.delivered++;
           state.score += DELIVERY_POINTS;
           if (state.score > state.bestScore) state.bestScore = state.score;
+          checkRecordBreak();
           const exit = state.entries.find(ee => ee.id === car.sinkEntryId);
           if (exit) {
             state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'deliver' });
@@ -1581,10 +1641,24 @@
       });
     }
 
-    // Jam meter: fills when any entry queue is too long.
+    // Jam meter: fills from two pressures.
+    //   1. Gate-queue overflow (cars piling up at the entries with nowhere to
+    //      dispatch).
+    //   2. In-flight stuck cars (cars idling mid-city — building queues,
+    //      junction snarls). Without (2) the meter ignored most real jams
+    //      until the gates choked, which is much later than the player would
+    //      expect from watching the city.
     let jamPressure = 0;
     for (const e of state.entries) {
       if (e.queue.length >= QUEUE_FAIL_SIZE) jamPressure += (e.queue.length - QUEUE_FAIL_SIZE + 1);
+    }
+    let stuckCount = 0;
+    for (const c of state.cars) {
+      if (c.stuckTime > 4 && !(c.pauseUntil && state.time < c.pauseUntil)) stuckCount++;
+    }
+    const STUCK_THRESHOLD = 6;
+    if (stuckCount > STUCK_THRESHOLD) {
+      jamPressure += (stuckCount - STUCK_THRESHOLD) * 0.4;
     }
     if (jamPressure > 0) state.jamMeter = Math.min(JAM_FAIL, state.jamMeter + JAM_FILL_RATE * dt * Math.max(1, jamPressure / 3));
     else state.jamMeter = Math.max(0, state.jamMeter - JAM_DRAIN_RATE * dt);
@@ -3141,6 +3215,14 @@
     state.civicCredits = 0;
     state.civicCreditsClaimed = 0;
 
+    // Snapshot the records the player is starting this run with. The first
+    // time the run pushes past either, fire a celebratory toast — that's the
+    // "I beat my best!" feedback that turns the high-score loop into a hook.
+    state._runBaselineScore = state.bestScore;
+    state._runBaselineMoney = state.bestMoney;
+    state._brokeScoreRecord = false;
+    state._brokeMoneyRecord = false;
+
     for (const ep of LEVEL.entries) {
       const node = makeNode(ep.x, ep.y, { entry: ep.id });
       state.entries.push({ ...ep, nodeId: node.id, queue: [], timer: 0 });
@@ -3172,6 +3254,26 @@
       el.classList.toggle('hidden', !game);
     });
     refreshToolCosts();
+  }
+
+  // High-score crossing detector. Each run snapshots the player's previous
+  // bests in buildLevel(); the moment the current run climbs past them, we
+  // pop a one-shot toast (per record per run, no spam). The "beat your last"
+  // moment is what makes a high-score game compelling — without it the
+  // player has no idea when they crossed.
+  function checkRecordBreak() {
+    if (!state.started) return;
+    if (!isGameMode()) {
+      if (!state._brokeScoreRecord && state._runBaselineScore > 0 && state.score > state._runBaselineScore) {
+        state._brokeScoreRecord = true;
+        toast(`🏆 New best score! Beating ${state._runBaselineScore}`, 2600);
+      }
+    } else {
+      if (!state._brokeMoneyRecord && state._runBaselineMoney > 0 && state.totalEarned > state._runBaselineMoney) {
+        state._brokeMoneyRecord = true;
+        toast(`🏆 New best earnings! Past $${state._runBaselineMoney}`, 2600);
+      }
+    }
   }
 
   // Civic-credit issuer — call after any income event in game mode. Issues
@@ -3286,17 +3388,22 @@
 
   function refreshToolCosts() {
     if (!isGameMode()) return;
-    // Park's cost label flips between "$150" and "FREE" depending on
-    // whether the player has an unspent civic credit.
-    const parkLabel = state.civicCredits > 0 ? 'FREE' : `$${COSTS.park}`;
+    // Per-instance scaling means each placeable's cost rises with how many of
+    // its type the player has built. Toolbar label tracks the *next* cost so
+    // the player sees the price of the building they're about to drop.
+    const houseNext = buildingCostFor('house');
+    const shopNext  = buildingCostFor('shop');
+    const mallNext  = buildingCostFor('mall');
+    const parkNext  = buildingCostFor('park');
+    const parkLabel = state.civicCredits > 0 ? 'FREE' : `$${parkNext}`;
     const labels = {
       road:       `$${COSTS.road.base}+`,
       bridge:     `$${COSTS.bridge.base}+`,
       oneway:     `Free`,
       roundabout: `$${COSTS.roundabout}`,
-      house:      `$${COSTS.house}`,
-      shop:       `$${COSTS.shop}`,
-      mall:       `$${COSTS.mall}`,
+      house:      `$${houseNext}`,
+      shop:       `$${shopNext}`,
+      mall:       `$${mallNext}`,
       park:       parkLabel,
       erase:      `Free`
     };
@@ -3306,11 +3413,11 @@
       if (!costEl) return;
       costEl.textContent = labels[t] || '';
       // Mark unaffordable for fixed-cost tools (park bypasses if free).
-      const fixed = (t === 'house') ? COSTS.house
-                  : (t === 'shop')  ? COSTS.shop
-                  : (t === 'mall')  ? COSTS.mall
+      const fixed = (t === 'house') ? houseNext
+                  : (t === 'shop')  ? shopNext
+                  : (t === 'mall')  ? mallNext
                   : (t === 'roundabout') ? COSTS.roundabout
-                  : (t === 'park')  ? (state.civicCredits > 0 ? 0 : COSTS.park)
+                  : (t === 'park')  ? (state.civicCredits > 0 ? 0 : parkNext)
                   : 0;
       btn.classList.toggle('unaffordable', fixed > 0 && state.money < fixed);
       // Civic-credit badge on the Park tool.
@@ -3542,7 +3649,8 @@
     const fill = document.getElementById('jam-fill');
     fill.style.width = (state.jamMeter * 100).toFixed(0) + '%';
     fill.classList.toggle('warn', state.jamMeter > 0.35 && state.jamMeter < 0.7);
-    fill.classList.toggle('bad', state.jamMeter >= 0.7);
+    fill.classList.toggle('bad', state.jamMeter >= 0.7 && state.jamMeter < OVERLOAD_JAM);
+    fill.classList.toggle('overload', state.jamMeter >= OVERLOAD_JAM);
   }
 
   let lastFrame = 0;

@@ -101,6 +101,37 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-27 — v33 (high-score loop + roundabout no longer eats traffic + scaling building costs + empty start)** —
+  Five tweaks aimed straight at "make this play like a game where you try
+  to beat your last run." **(1) Roundabout traffic-wipe fixed** — the old
+  `makeRoundabout` filtered out every car whose path touched the rewired
+  approach edges. That made the roundabout an exploit: jamming up? plonk
+  one in front of the queue, traffic vanishes, jam meter empties, your
+  high-score discipline is broken. Now affected cars are re-routed onto
+  the new graph from their current edge endpoint (`routeFromNode(curEdge.to,
+  destNode)`); positions on the now-shorter approach edges get clamped to
+  `length - 1` so nothing overshoots its polyline. **(2) Jam meter reads
+  in-flight congestion** — used to fire only when a *gate* queue exceeded
+  9 cars; mid-city snarls (mall over-queueing, bottlenecks at small
+  junctions) didn't move the meter. Added a stuck-car contributor: cars
+  with `stuckTime > 4` over a count of 6 add to `jamPressure` so the meter
+  finally tracks what the player is actually watching. **(3) Empty starter
+  map** — `LEVEL.starterRoads` is now `[]`. The map opens with just four
+  edge gates and your first move is to drag a road from one of them.
+  Splash hint updated. **(4) Scaling building costs** — costs were flat
+  ($20 / $40 / $100) so income compounded with city size while spending
+  didn't, and money became effectively unlimited after the first few
+  malls. New `COST_SCALING` adds a linear bump per existing instance:
+  house +$10 each (20→30→40…), shop +$25 (40→65→90…), mall +$75
+  (100→175→250…), park +$50. Toolbar labels track the *next* cost. The
+  player has to keep weighing "another mall vs. fix the layout" rather
+  than spamming. **(5) "New best" toast** — every run snapshots the
+  player's previous bestScore (sandbox) / bestMoney (game) at
+  `buildLevel()`. The first time the live run climbs past it, a one-shot
+  🏆 toast fires. That moment of crossing was previously invisible —
+  without it the high-score loop has no payoff. Plus a small visual:
+  jam fill now pulses red when ≥ `OVERLOAD_JAM` (0.95) so the
+  "city about to collapse" countdown is unmissable.
 - **2026-04-26 — v32 (buildings beside roads, not on them)** — Buildings
   now sit BESIDE the road, the way real city blocks do. The drawn
   position of a house / shop / mall is one grid step perpendicular to

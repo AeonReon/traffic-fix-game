@@ -5,10 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
 <meta name="theme-color" content="#f7f1e6" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="Traffic Flow" />
 <meta name="description" content="Traffic Flow — Build a city, keep the cars moving. Free Play sandbox or Game Mode where you grow an economy until it overloads." />
 <title>Traffic Flow</title>
-<link rel="icon" type="image/png" href="images/icon.png" />
-<link rel="apple-touch-icon" href="images/icon.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="/images/icon-192.png" />
+<link rel="icon" type="image/png" sizes="512x512" href="/images/icon-512.png" />
+<link rel="apple-touch-icon" href="/images/icon-192.png" />
+<link rel="manifest" href="/manifest.json" />
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  }
+</script>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -45,7 +54,7 @@
         </div>
       </div>
 
-      <p class="hint">One finger drags a road. Two fingers pan and pinch-zoom. Tap a 3-way junction with <b>Roundabout</b> to convert it.</p>
+      <p class="hint">Drag from any gate (N / S / E / W) to lay your first road, then place houses and shops next to it. Two fingers pan and pinch-zoom.</p>
     </div>
   </div>
 
@@ -251,7 +260,7 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <div id="version-pill" title="Build version">v32</div>
+  <div id="version-pill" title="Build version">v33</div>
 </div>
 
 <script src="js/game.js"></script>
