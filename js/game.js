@@ -57,7 +57,17 @@
     // No starter road. The map opens with just the four edge gates so the
     // player's first move is always to draw a road from a gate. Gives the
     // empty-canvas-feel that "I am building this from scratch."
-    starterRoads: []
+    starterRoads: [],
+    // Static water features. Roads cannot cross a lake; a Bridge can. Purely
+    // visual + drag-validation — lakes never appear in saves. Coordinates
+    // chosen so neither lake sits across a gate's natural straight-in path:
+    // the player can still build N–S and W–E direct routes if they want,
+    // but routing AROUND the water (or over with bridges) is what gives
+    // each city its own shape.
+    lakes: [
+      { cx: 1340, cy:  720, r: 220 },
+      { cx:  470, cy: 1690, r: 200 }
+    ]
   };
 
   // Cars and physics (pixel units, pixels per second)
@@ -92,7 +102,7 @@
   // Park bonus — buildings within PARK_RADIUS get +PARK_BONUS_PER_PARK to
   // their income multiplier, capped at PARK_BONUS_CAP. Parks within range
   // of one another don't compound (you'd just spam them).
-  const PARK_RADIUS = 100;
+  const PARK_RADIUS = 140;
   const PARK_BONUS_PER_PARK = 0.25;
   const PARK_BONUS_CAP = 0.75;
 
@@ -104,7 +114,7 @@
 
   // Build version — bumped on every ship; shown in the corner pill so the
   // user can see at a glance whether the page reloaded with a new build.
-  const VERSION = 'v33';
+  const VERSION = 'v36';
 
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
@@ -417,6 +427,19 @@
     return (qx - px) ** 2 + (qy - py) ** 2;
   }
 
+  // Distance² from a point to a segment, used by the lake-crossing check
+  // and elsewhere. Inlined version of the routine below for readability.
+  function segCrossesAnyLake(a, b) {
+    if (!LEVEL.lakes || !LEVEL.lakes.length) return false;
+    for (const L of LEVEL.lakes) {
+      const d2 = distPointSeg2(L.cx, L.cy, a, b);
+      // Margin of 4 world units so a road that just *grazes* the shore is
+      // allowed — the visual edge of the lake fades out a few pixels.
+      if (d2 < (L.r - 4) * (L.r - 4)) return true;
+    }
+    return false;
+  }
+
   function segIntersect(a, b, c, d) {
     const d1x = b.x - a.x, d1y = b.y - a.y;
     const d2x = d.x - c.x, d2y = d.y - c.y;
@@ -668,6 +691,9 @@
         if (segIntersect(aPt, bPt, pts[i - 1], pts[i])) return true;
       }
     }
+    // Water counts as a crossing too — turns the drag preview red so the
+    // player sees they need a Bridge to cross the lake.
+    if (segCrossesAnyLake(aPt, bPt)) return true;
     return false;
   }
 
@@ -832,6 +858,10 @@
           }
         }
       }
+      // Roads can't cross water either — the player needs a Bridge for that.
+      if (segCrossesAnyLake(shape[0], shape[1])) {
+        return { ok: false, reason: 'Use Bridge to cross water' };
+      }
     }
 
     const [fwd, rev] = makeEdge(startNode, endNode, { custom: true, bridge: isBridge, shape });
@@ -881,6 +911,15 @@
     const nodeSnap = (nodeSnapRaw && !blockedNodeIds.has(nodeSnapRaw.id)) ? nodeSnapRaw : null;
     const edgeSnap = !nodeSnap ? findNearestEdgePoint(wx, wy, sn.edge) : null;
 
+    // No buildings in the water — parks and houses both need dry ground.
+    if (LEVEL.lakes) {
+      for (const L of LEVEL.lakes) {
+        if ((wx - L.cx) ** 2 + (wy - L.cy) ** 2 < (L.r - 4) ** 2) {
+          return { ok: false, reason: 'Can\'t build on water' };
+        }
+      }
+    }
+
     let node;
     if (nodeSnap) node = nodeSnap;
     else if (edgeSnap) node = splitEdgeAtPoint(edgeSnap.edge, edgeSnap.x, edgeSnap.y);
@@ -900,9 +939,15 @@
 
     // Visual / footprint check — minimum spacing measured against drawn
     // positions so two houses on opposite sides of one road don't collide.
+    // Park-vs-park is given a smaller minimum so parks can tile into the
+    // "park zones" the user asked for: lawns merge into one continuous
+    // green carpet instead of bouncing apart.
     const MIN_BLOCK_DIST = GRID - 4;   // 56 — adjacent grid cells (60 apart) pass
+    const PARK_PARK_MIN_DIST = 56;     // exact grid-step apart, enough for shared lawn
     for (const b of state.blocks) {
-      if (Math.hypot(b.x - visualX, b.y - visualY) < MIN_BLOCK_DIST) {
+      const d = Math.hypot(b.x - visualX, b.y - visualY);
+      const minD = (type === 'park' && b.type === 'park') ? PARK_PARK_MIN_DIST : MIN_BLOCK_DIST;
+      if (d < minD) {
         return { ok: false, reason: 'Too close to another building' };
       }
     }
@@ -1654,9 +1699,17 @@
     }
     let stuckCount = 0;
     for (const c of state.cars) {
-      if (c.stuckTime > 4 && !(c.pauseUntil && state.time < c.pauseUntil)) stuckCount++;
+      if (c.stuckTime <= 4) continue;
+      if (c.pauseUntil && state.time < c.pauseUntil) continue;   // parked, not stuck
+      // Cars patiently queueing at their destination are organic demand,
+      // not gridlock. If a car is on its FINAL path edge heading to a
+      // building, it's bunching at the curb behind earlier arrivals — let
+      // the per-building pressure ring report that, not the city-wide jam
+      // meter. Otherwise a popular mall would always show as "city jammed."
+      if (c.destKind === 'block' && c.pathIdx === c.path.length - 1) continue;
+      stuckCount++;
     }
-    const STUCK_THRESHOLD = 6;
+    const STUCK_THRESHOLD = 8;
     if (stuckCount > STUCK_THRESHOLD) {
       jamPressure += (stuckCount - STUCK_THRESHOLD) * 0.4;
     }
@@ -1747,6 +1800,7 @@
     ctx.scale(state.view.dpr, state.view.dpr);
 
     drawGrid();
+    drawLakes();
     drawDecor();
     drawRoads();
     drawBlocks();
@@ -1946,14 +2000,24 @@
     state.decor = [];
     let seed = 1337;
     const rand = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    function inAnyLake(x, y) {
+      if (!LEVEL.lakes) return false;
+      for (const L of LEVEL.lakes) {
+        if ((x - L.cx) ** 2 + (y - L.cy) ** 2 < (L.r + 6) ** 2) return true;
+      }
+      return false;
+    }
     for (let x = GRID; x < LOGICAL_W; x += GRID) {
       for (let y = GRID; y < LOGICAL_H; y += GRID) {
         if (rand() > 0.14) continue;
         const r = rand();
         const kind = r < 0.32 ? 'tree' : r < 0.72 ? 'grass' : 'flower';
+        const dx = (rand() - 0.5) * 28;
+        const dy = (rand() - 0.5) * 28;
+        if (inAnyLake(x + dx, y + dy)) continue;
         state.decor.push({
-          x: x + (rand() - 0.5) * 28,
-          y: y + (rand() - 0.5) * 28,
+          x: x + dx,
+          y: y + dy,
           kind,
           size: 0.8 + rand() * 0.5,
           tint: Math.floor(rand() * 5)
@@ -1966,6 +2030,58 @@
   const GRASS_TINTS = ['rgba(132,165,110,0.5)', 'rgba(118,155,95,0.5)',
                        'rgba(145,175,120,0.55)', 'rgba(108,145,90,0.5)'];
   const FLOWER_TINTS = ['#db6d51', '#e8a13a', '#c65893', '#6a9f4a', '#a065c3'];
+
+  // Static water features — pretty calm pools the city has to route around
+  // (or bridge over). Drawn between the ground and decor so the trees / grass
+  // tufts inside the radius stay hidden behind the water.
+  function drawLakes() {
+    if (!LEVEL.lakes || !LEVEL.lakes.length) return;
+    const s = state.view.scale;
+    for (const L of LEVEL.lakes) {
+      const c = w2s(L.cx, L.cy);
+      const rPx = L.r * s;
+      // Soft outer halo — moisture / shore line, gives the water a gentle
+      // edge instead of a hard circle.
+      const grad = ctx.createRadialGradient(c.sx, c.sy, rPx * 0.6, c.sx, c.sy, rPx * 1.05);
+      grad.addColorStop(0, 'rgba(120, 175, 195, 1)');
+      grad.addColorStop(0.85, 'rgba(120, 175, 195, 1)');
+      grad.addColorStop(1, 'rgba(120, 175, 195, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(c.sx, c.sy, rPx * 1.05, 0, Math.PI * 2);
+      ctx.fill();
+      // Main water body — slightly darker teal inside.
+      const water = ctx.createRadialGradient(c.sx - rPx * 0.25, c.sy - rPx * 0.25, rPx * 0.1,
+                                              c.sx, c.sy, rPx);
+      water.addColorStop(0, '#a8d2dd');
+      water.addColorStop(0.6, '#6f9fb6');
+      water.addColorStop(1, '#557f95');
+      ctx.fillStyle = water;
+      ctx.beginPath();
+      ctx.arc(c.sx, c.sy, rPx, 0, Math.PI * 2);
+      ctx.fill();
+      // Subtle highlight curve — a single soft arc reads as "shimmer."
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+      ctx.lineWidth = Math.max(1, 1.2 * s);
+      ctx.beginPath();
+      ctx.arc(c.sx - rPx * 0.18, c.sy - rPx * 0.18, rPx * 0.55, Math.PI * 0.85, Math.PI * 1.4);
+      ctx.stroke();
+      // Two thin ripple lines, gently animated by state.time so the water
+      // feels alive without distracting motion.
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+      ctx.lineWidth = Math.max(0.8, 0.9 * s);
+      const phase = (state.time * 0.5) % 1;
+      for (let i = 0; i < 2; i++) {
+        const t = (phase + i * 0.5) % 1;
+        const ripR = rPx * (0.35 + 0.4 * t);
+        ctx.globalAlpha = (1 - t) * 0.55;
+        ctx.beginPath();
+        ctx.arc(c.sx, c.sy, ripR, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
 
   function drawDecor() {
     if (!state.decor) return;
@@ -2129,39 +2245,64 @@
     }
   }
 
-  // Park — a small green square with a few trees, a bench, and a path. The
-  // visual emphasises "this is the city's lung" so neighbours feel like
-  // they're getting the bonus they actually do.
+  // Park — a sizeable green block with several trees, a bench, a winding
+  // path, and a small flowerbed. The footprint is large enough that two
+  // adjacent parks read as one continuous "park zone" — the user asked
+  // for parks the size of four old ones.
   function drawPark(cx, cy, s, seed = 0) {
-    // Wider plot than house/shop — parks are SUPPOSED to feel a bit lavish.
-    const plotR = 28 * s;
-    ctx.fillStyle = '#9bbf6f';
+    const plotR = 50 * s;
+    // Two-tone lawn — slightly darker outer ring, lighter centre — gives
+    // the park visible depth at zoom-out without extra geometry.
+    ctx.fillStyle = '#8db867';
     ctx.beginPath();
     roundedRect(cx - plotR, cy - plotR, plotR * 2, plotR * 2, plotR * 0.22);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(60, 80, 50, 0.35)';
+    ctx.fillStyle = '#a8cf83';
+    ctx.beginPath();
+    roundedRect(cx - plotR + 5 * s, cy - plotR + 5 * s,
+                plotR * 2 - 10 * s, plotR * 2 - 10 * s, plotR * 0.18);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(60, 80, 50, 0.4)';
     ctx.lineWidth = 1;
+    ctx.beginPath();
+    roundedRect(cx - plotR, cy - plotR, plotR * 2, plotR * 2, plotR * 0.22);
     ctx.stroke();
-    // Light path winding through (cream colour, soft).
-    ctx.strokeStyle = 'rgba(244, 234, 213, 0.75)';
-    ctx.lineWidth = 4 * s;
+    // Cream path winding through, wider than before so it reads at zoom.
+    ctx.strokeStyle = 'rgba(244, 234, 213, 0.78)';
+    ctx.lineWidth = 6 * s;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(cx - plotR + 5 * s, cy + 6 * s);
-    ctx.quadraticCurveTo(cx, cy - 4 * s, cx + plotR - 5 * s, cy + 6 * s);
+    ctx.moveTo(cx - plotR + 8 * s, cy + 14 * s);
+    ctx.quadraticCurveTo(cx - 4 * s, cy - 4 * s, cx + 6 * s, cy - 8 * s);
+    ctx.quadraticCurveTo(cx + plotR * 0.4, cy - plotR * 0.2, cx + plotR - 8 * s, cy + 12 * s);
     ctx.stroke();
-    // Three trees at varied positions. Larger / fluffier than the plot
-    // sprigs other buildings use.
+    // Pond on the lower-right — a tiny calm puddle adds variety without
+    // turning the park into a forest.
+    ctx.fillStyle = '#7fb6cc';
+    ctx.beginPath();
+    ctx.ellipse(cx + 22 * s, cy + 22 * s, 9 * s, 6 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(40, 70, 90, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    // Five trees scattered round the plot — bigger, fluffier than v32.
     const trees = [
-      { dx: -14, dy: -10, r: 8 },
-      { dx:  12, dy: -12, r: 9 },
-      { dx:   2, dy:  12, r: 7 }
+      { dx: -28, dy: -22, r: 11 },
+      { dx:  -8, dy: -32, r:  9 },
+      { dx:  22, dy: -20, r: 12 },
+      { dx: -30, dy:  18, r: 10 },
+      { dx:  10, dy:   2, r:  8 }
     ];
     for (const t of trees) {
       const tx = cx + t.dx * s, ty = cy + t.dy * s;
+      // Soft shadow grounds the canopy
+      ctx.fillStyle = 'rgba(30, 45, 25, 0.18)';
+      ctx.beginPath();
+      ctx.ellipse(tx + 1.2 * s, ty + t.r * s * 0.55, t.r * s, t.r * s * 0.4, 0, 0, Math.PI * 2);
+      ctx.fill();
       // Trunk
       ctx.fillStyle = '#5a3a22';
-      ctx.fillRect(tx - 1.5 * s, ty + t.r * s * 0.4, 3 * s, t.r * s * 0.7);
+      ctx.fillRect(tx - 1.8 * s, ty + t.r * s * 0.4, 3.6 * s, t.r * s * 0.7);
       // Canopy
       ctx.fillStyle = '#3e7a38';
       ctx.beginPath();
@@ -2171,17 +2312,34 @@
       ctx.lineWidth = 1;
       ctx.stroke();
       // Highlight
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
       ctx.beginPath();
       ctx.arc(tx - t.r * s * 0.35, ty - t.r * s * 0.35, t.r * s * 0.45, 0, Math.PI * 2);
       ctx.fill();
     }
-    // Tiny bench (wood seat)
+    // Flower beds — two clusters of four flowers (red + yellow + pink + amber).
+    const FLOWERS = ['#e85871', '#f5d040', '#a850c8', '#e8a13a'];
+    const beds = [{ bx: 6, by: 24 }, { bx: -22, by: -2 }];
+    for (const bed of beds) {
+      for (let i = 0; i < 4; i++) {
+        const fx = cx + (bed.bx + (i - 1.5) * 4) * s;
+        const fy = cy + bed.by * s;
+        ctx.fillStyle = FLOWERS[i];
+        ctx.beginPath();
+        ctx.arc(fx, fy, 1.6 * s, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // Bench — slightly bigger to scale with the new plot.
     ctx.fillStyle = '#6b4a2f';
-    ctx.fillRect(cx - 6 * s, cy + 13 * s, 12 * s, 2.5 * s);
+    ctx.fillRect(cx - 11 * s, cy + 32 * s, 22 * s, 3.5 * s);
     ctx.strokeStyle = 'rgba(30, 35, 50, 0.5)';
     ctx.lineWidth = 1;
-    ctx.strokeRect(cx - 6 * s, cy + 13 * s, 12 * s, 2.5 * s);
+    ctx.strokeRect(cx - 11 * s, cy + 32 * s, 22 * s, 3.5 * s);
+    // Bench legs — small dark dashes underneath
+    ctx.fillStyle = 'rgba(50, 35, 20, 0.85)';
+    ctx.fillRect(cx - 9 * s,  cy + 35.5 * s, 1.5 * s, 3 * s);
+    ctx.fillRect(cx + 7.5 * s, cy + 35.5 * s, 1.5 * s, 3 * s);
   }
 
   const HOUSE_BODY = ['#f0dbb2', '#ecd1a7', '#e9c899', '#eed7b3', '#e2c29a', '#f2e0ba'];
@@ -2805,7 +2963,10 @@
       e.preventDefault();
       const r = canvas.getBoundingClientRect();
       const mx = e.clientX - r.left, my = e.clientY - r.top;
-      zoomAt(mx, my, Math.pow(1.0015, -e.deltaY));
+      // Snappier wheel zoom (was 1.0015) so a single scroll noticeably
+      // changes the zoom — important for context-switching between the
+      // overview and a jam spot.
+      zoomAt(mx, my, Math.pow(1.0035, -e.deltaY));
     }, { passive: false });
 
     canvas.addEventListener('pointerdown', onPointerDown);
@@ -2929,7 +3090,10 @@
 
   function zoomAt(mx, my, factor) {
     const before = s2w(mx, my);
-    state.view.scale = Math.max(0.25, Math.min(4, state.view.scale * factor));
+    // Wider zoom range — min was 0.25 which still cropped the 1800×2340 map
+    // on phone screens. 0.12 lets the player see the whole world at once,
+    // critical for "see the whole city, then dive in to a jam spot."
+    state.view.scale = Math.max(0.12, Math.min(4, state.view.scale * factor));
     const after = s2w(mx, my);
     state.view.originX += before.x - after.x;
     state.view.originY += before.y - after.y;
@@ -2968,8 +3132,14 @@
         isBridge: state.tool === 'bridge'
       };
     } else {
-      state.panActive = true;
-      state.panFrom = { mx, my, ox: state.view.originX, oy: state.view.originY };
+      // For non-road tools, hold pan in a "pending" state until the user
+      // moves further than TAP_MOVE_THRESHOLD. Without this, any small
+      // finger jitter during a tap would shift the camera AND set
+      // p.moved=true, which silently disqualified the tap from placing
+      // a building. This was the "I tap five times and finally one
+      // works" bug.
+      state.panActive = false;
+      state.panPending = { mx, my, ox: state.view.originX, oy: state.view.originY };
     }
   }
 
@@ -2983,13 +3153,22 @@
     };
   }
 
+  // Tap forgiveness — touch input always has a few px of jitter even when
+  // the user thinks they're holding still. The previous 4 px threshold
+  // meant tiny finger drift was being read as a drag, killing every
+  // building tap. 12 screen px matches what most native iOS UIs use.
+  const TAP_MOVE_THRESHOLD = 12;
+  // Held taps up to ~700 ms still count — the user may rest their finger
+  // on the screen briefly to make sure they hit the right spot.
+  const TAP_TIME_THRESHOLD_MS = 700;
+
   function onPointerMove(e) {
     const r = canvas.getBoundingClientRect();
     const mx = e.clientX - r.left, my = e.clientY - r.top;
     const p = state.pointers.get(e.pointerId);
     if (p) {
       p.x = mx; p.y = my;
-      if (Math.hypot(mx - p.startX, my - p.startY) > 4) p.moved = true;
+      if (Math.hypot(mx - p.startX, my - p.startY) > TAP_MOVE_THRESHOLD) p.moved = true;
     }
 
     if (state.pinch && state.pointers.size === 2) {
@@ -3046,6 +3225,12 @@
       }
       state.dragging.snapEnd = nodeSnap;
       state.dragging.snapEndEdge = edgeSnap;
+    } else if (state.panPending && !state.panActive && p) {
+      // Promote pending → active only once the player has clearly moved.
+      if (Math.hypot(mx - state.panPending.mx, my - state.panPending.my) > TAP_MOVE_THRESHOLD) {
+        state.panActive = true;
+        state.panFrom = state.panPending;
+      }
     } else if (state.panActive && p) {
       const dx = (mx - state.panFrom.mx) / state.view.scale;
       const dy = (my - state.panFrom.my) / state.view.scale;
@@ -3061,11 +3246,14 @@
     const p = state.pointers.get(e.pointerId);
     state.pointers.delete(e.pointerId);
     if (state.pointers.size < 2) state.pinch = null;
-    if (state.pointers.size === 0) state.panActive = false;
+    if (state.pointers.size === 0) {
+      state.panActive = false;
+      state.panPending = null;
+    }
 
     if (!p) return;
     const dt = performance.now() - p.startedAt;
-    const isTap = dt < 400 && !p.moved && state.pointers.size === 0;
+    const isTap = dt < TAP_TIME_THRESHOLD_MS && !p.moved && state.pointers.size === 0;
 
     if (state.dragging) {
       const d = state.dragging;
@@ -3136,6 +3324,7 @@
         const pt = snapToGrid(world.x, world.y);
         const res = placeBlock(pt.x, pt.y, 'park');
         if (!res.ok) return toast(res.reason);
+        Audio.placeBuilding();
         toast(res.usedCivicCredit ? 'Free Park placed (civic credit)' : 'Park placed');
         return;
       }
@@ -3164,6 +3353,7 @@
       const visual = offsetVisualFromRoad(roadX, roadY, world.x, world.y, roadDirX, roadDirY);
       const res = placeBlock(roadX, roadY, state.tool, { visualPos: visual });
       if (!res.ok) return toast(res.reason);
+      Audio.placeBuilding();
       const label = BUILDING_TYPES[state.tool].label;
       if (res.usedCivicCredit) toast(`Free ${label} placed (civic credit)`);
       else toast(`${label} placed`);
@@ -3713,41 +3903,124 @@
       osc.stop(t + 0.24);
     },
     click() {
+      // Subtle high "tick" for road/bridge build — short and out of the way.
       const ctx = this.ensure(); if (!ctx || this.muted) return;
       const osc = ctx.createOscillator();
       const g = ctx.createGain();
-      osc.type = 'square';
+      osc.type = 'triangle';
       const t = ctx.currentTime;
-      osc.frequency.setValueAtTime(1200, t);
-      osc.frequency.exponentialRampToValueAtTime(240, t + 0.07);
-      g.gain.setValueAtTime(0.08, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+      osc.frequency.setValueAtTime(900, t);
+      osc.frequency.exponentialRampToValueAtTime(380, t + 0.08);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.06, t + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
       osc.connect(g).connect(this.master);
       osc.start(t);
-      osc.stop(t + 0.09);
+      osc.stop(t + 0.11);
+    },
+    placeBuilding() {
+      // Warm "thunk" for placing a house / shop / mall — like a wood block
+      // being set down, distinct from the sharp road click.
+      const ctx = this.ensure(); if (!ctx || this.muted) return;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      const t = ctx.currentTime;
+      osc.frequency.setValueAtTime(280, t);
+      osc.frequency.exponentialRampToValueAtTime(150, t + 0.18);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.14, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+      osc.connect(g).connect(this.master);
+      osc.start(t);
+      osc.stop(t + 0.24);
     },
     startPad() {
       const ctx = this.ensure(); if (!ctx || this.padStarted) return;
       this.padStarted = true;
-      const o1 = ctx.createOscillator();
-      const o2 = ctx.createOscillator();
-      o1.type = o2.type = 'sawtooth';
-      o1.frequency.value = 110;
-      o2.frequency.value = 110 * Math.pow(2, 7 / 1200);  // +7 cents
-      const lp = ctx.createBiquadFilter();
-      lp.type = 'lowpass';
-      lp.frequency.value = 800;
-      lp.Q.value = 0.5;
-      const lfo = ctx.createOscillator();
-      const lfoGain = ctx.createGain();
-      lfo.frequency.value = 0.2;
-      lfoGain.gain.value = 300;
-      lfo.connect(lfoGain).connect(lp.frequency);
-      const g = ctx.createGain();
-      g.gain.value = 0.05;
-      o1.connect(lp); o2.connect(lp);
-      lp.connect(g).connect(this.master);
-      [o1, o2, lfo].forEach(n => n.start());
+
+      // Soft chord pad — three sine waves on an A-major triad. Each note
+      // has its own slow gain LFO at near-coprime frequencies, so the
+      // chord very gently "breathes" instead of holding a static drone.
+      // Replaces the v23 saw-bass drone, which read as eerie / intense.
+      const padOut = ctx.createGain();
+      padOut.gain.value = 0.06;
+      const padLP = ctx.createBiquadFilter();
+      padLP.type = 'lowpass';
+      padLP.frequency.value = 1300;
+      padLP.Q.value = 0.4;
+      padOut.connect(padLP).connect(this.master);
+      const NOTES = [220.00, 277.18, 329.63];      // A3, C#4, E4
+      const LFO_RATES = [0.07, 0.09, 0.13];
+      for (let i = 0; i < NOTES.length; i++) {
+        const o = ctx.createOscillator();
+        o.type = 'sine';
+        o.frequency.value = NOTES[i];
+        const ng = ctx.createGain();
+        ng.gain.value = 0.5;
+        const lfo = ctx.createOscillator();
+        lfo.frequency.value = LFO_RATES[i];
+        const lfoG = ctx.createGain();
+        lfoG.gain.value = 0.4;
+        lfo.connect(lfoG).connect(ng.gain);
+        o.connect(ng).connect(padOut);
+        o.start();
+        lfo.start();
+      }
+
+      // Soft breeze — white noise through a bandpass with a slow filter
+      // sweep. Quiet but present, gives the pad a "park" / outdoors feel.
+      try {
+        const noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+        const ch = noiseBuf.getChannelData(0);
+        for (let j = 0; j < ch.length; j++) ch[j] = (Math.random() * 2 - 1) * 0.5;
+        const noise = ctx.createBufferSource();
+        noise.buffer = noiseBuf;
+        noise.loop = true;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = 700;
+        bp.Q.value = 0.6;
+        const bpLfo = ctx.createOscillator();
+        bpLfo.frequency.value = 0.08;
+        const bpLfoG = ctx.createGain();
+        bpLfoG.gain.value = 250;
+        bpLfo.connect(bpLfoG).connect(bp.frequency);
+        const ng = ctx.createGain();
+        ng.gain.value = 0.018;
+        noise.connect(bp).connect(ng).connect(this.master);
+        noise.start();
+        bpLfo.start();
+      } catch (_) { /* old browsers */ }
+
+      // Wind-chime scheduler — every 7-14s a single soft pentatonic tone
+      // with a long bell-like decay, scattering across A pentatonic.
+      this._scheduleChime();
+    },
+    _scheduleChime() {
+      if (this._chimeTimer) clearTimeout(this._chimeTimer);
+      const PENTATONIC = [440.00, 554.37, 659.25, 739.99, 880.00];   // A4, C#5, E5, F#5, A5
+      const fire = () => {
+        if (!this.ctx) return;
+        if (!this.muted) {
+          const ctx = this.ctx;
+          const t = ctx.currentTime;
+          const freq = PENTATONIC[Math.floor(Math.random() * PENTATONIC.length)];
+          const o = ctx.createOscillator();
+          const og = ctx.createGain();
+          o.type = 'sine';
+          o.frequency.value = freq;
+          og.gain.setValueAtTime(0.0001, t);
+          og.gain.exponentialRampToValueAtTime(0.05, t + 0.05);
+          og.gain.exponentialRampToValueAtTime(0.0001, t + 1.6);
+          o.connect(og).connect(this.master);
+          o.start(t);
+          o.stop(t + 1.7);
+        }
+        const nextDelay = 7000 + Math.random() * 7000;
+        this._chimeTimer = setTimeout(fire, nextDelay);
+      };
+      this._chimeTimer = setTimeout(fire, 5000);
     }
   };
 

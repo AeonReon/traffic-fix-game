@@ -101,6 +101,57 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-27 — v36 (forgiving taps + nicer ambient music + place sound)** —
+  Two pain points the user flagged. **(1) Building placement now responds**
+  — the old tap detector treated 4 px of finger jitter as a drag, so on
+  busy phone screens taps silently failed and the player had to "bash
+  the area five times until one finally worked." Three changes: tap
+  movement threshold 4 → 12 px (matches iOS native), tap time threshold
+  400 ms → 700 ms (held taps still count), and pan activation is now
+  deferred until the player has actually moved past 12 px — so a small
+  drift no longer pans the camera AND poisons the tap. Net effect: a
+  single accurate tap places a building reliably. **(2) Calm ambient
+  bed** — the v23 saw drone read as "weird intense." Replaced with: a
+  three-note A-major sine chord pad, each voice gain-modulated by its
+  own slow LFO at coprime rates so the chord gently breathes; a quiet
+  bandpassed-noise breeze with a slow filter sweep (the "park" feel);
+  and a wind-chime scheduler that fires a single soft pentatonic tone
+  every 7-14 seconds with a long bell decay. Road click moved from a
+  square-wave tick to a softer triangle. **(3) Building thunk** — new
+  `Audio.placeBuilding()` plays a warm low-sine drop on every successful
+  House / Shop / Mall / Park placement so the action feels grounded.
+- **2026-04-27 — v35 (wider zoom + lakes + bigger parks)** — Three "almost
+  there" polish moves. **(1) Zoom range opened up** — min 0.25 → 0.12 so
+  the player can see the entire 1800×2340 map at once, then dive into a
+  jam spot. Wheel zoom factor sped up too (1.0015 → 1.0035) so a single
+  scroll noticeably moves the camera. **(2) Lakes** — two static water
+  features (`LEVEL.lakes`, hand-placed circles upper-right + lower-left).
+  Pretty radial-gradient pools with a soft shore halo and two animated
+  ripple rings. Roads can't cross water — `lineWouldCross` and `addRoad`
+  both reject regular roads through a lake; Bridges go over fine.
+  Buildings (including parks) can't be placed in the water. Decor
+  generator skips lake interiors so trees don't sprout in the pond. The
+  city is now visibly *somewhere* — the bias toward routing around or
+  bridging across water gives every map its own shape. **(3) Parks 4×
+  bigger** — `drawPark` plotR 28 → 50 (≈3× area), PARK_RADIUS bonus 100 →
+  140 to match the bigger visual. New details: two-tone lawn, a winding
+  path, a small ornamental pond on the corner, five trees, two flower
+  beds, larger bench. Park-vs-park min spacing relaxed to a single grid
+  step (56 world units) so adjacent parks tile their lawns into one
+  continuous "park zone" — the user explicitly wanted to be able to
+  build full park areas. Other building spacings unchanged. (Bridges
+  already had no length cap — the "long bridges" issue resolves itself
+  the moment the wider zoom is in.)
+- **2026-04-27 — v34 (jam meter ignores curb-queue at destinations)** —
+  Refining v33's stuck-car contributor. A popular mall naturally builds a
+  queue of arriving cars (lead car parks, followers brake to match) and
+  v33's detector counted those as "city jammed" — penalising organic
+  demand. Now the loop skips cars on their FINAL path edge whose dest is
+  a block: they're bunching at the curb, not gridlocked. Per-building
+  pressure rings still show that signal locally. Threshold also relaxed
+  from 6 → 8 cars so brief flow queues don't twitch the meter at all.
+  Real jams (cars stuck mid-route, route blocked, intersection seized)
+  still register because those cars are NOT on their final edge.
 - **2026-04-27 — v33 (high-score loop + roundabout no longer eats traffic + scaling building costs + empty start)** —
   Five tweaks aimed straight at "make this play like a game where you try
   to beat your last run." **(1) Roundabout traffic-wipe fixed** — the old
