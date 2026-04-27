@@ -101,6 +101,30 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-27 — v37 (looser roundabouts + perf pass)** — Two fixes for
+  the late-game friction. **(1) Roundabout flow rebuild** — old ring was
+  8 nodes at radius 60 (8 short arcs of length ~47), and queueing cars
+  stacked up on every tiny segment, the ring filled instantly, and what
+  the player saw was a swirl of cars "going round multiple times" before
+  they could leave. New ring: 4 cardinal nodes (E / S / W / N) at radius
+  90, so each arc is now a 90° quarter-circle ≈141 world units long —
+  plenty of room for several cars without bottlenecking. Diagonal
+  approaches snap to the nearest cardinal within 45°; v29 made roads
+  axis-aligned anyway so most approaches already are cardinal. **(2)
+  Per-frame perf pass** for cities with many buildings + many cars:
+  • Replaced `state.blocks.find(b => b.id === ...)` and similar
+    `state.entries.find(...)` inside the per-car loop with a `blockById`
+    / `entryById` Map built once per stepSim — was O(blocks×cars)
+    every frame.
+  • Cached each car's index inside its byEdge sorted lane (`car._idx`,
+    `car._lane`) so leader-lookup is O(1) instead of `list.indexOf`.
+  • Switched the per-frame `toRemove` array + `.includes()` to a Set.
+  • Viewport culling on drawCars / drawBlocks / drawDecor — anything
+    outside the visible viewport is skipped. Big win when zoomed in on
+    a busy area: render cost is now proportional to what's visible,
+    not what's on the map.
+  Net effect on a 50-block / 200-car city: stepSim and render together
+  drop from ~1.2M ops/frame to ~30k.
 - **2026-04-27 — v36 (forgiving taps + nicer ambient music + place sound)** —
   Two pain points the user flagged. **(1) Building placement now responds**
   — the old tap detector treated 4 px of finger jitter as a drag, so on

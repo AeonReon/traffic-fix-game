@@ -114,7 +114,7 @@
 
   // Build version — bumped on every ship; shown in the corner pill so the
   // user can see at a glance whether the page reloaded with a new build.
-  const VERSION = 'v36';
+  const VERSION = 'v37';
 
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
@@ -1008,7 +1008,7 @@
     return d;
   }
 
-  function makeRoundabout(nodeId, radius = 60) {
+  function makeRoundabout(nodeId, radius = 90) {
     const node = state.nodes.get(nodeId);
     if (!node) return { ok: false, reason: 'no node' };
 
@@ -1038,18 +1038,14 @@
       return { dx: dx / L, dy: dy / L };
     }
 
-    // v30 — always create EIGHT ring nodes at fixed bearings (cardinal +
-    // ordinal: E / NE / N / NW / W / SW / S / SE). The original implementation
-    // only created one node per approach, which meant adding a fifth approach
-    // later required rebuilding the roundabout. Eight fixed nodes means new
-    // diagonal connections can land on a ring node directly. The "missing"
-    // four nodes for a 4-way junction sit there as visible attachment
-    // points.
-    const FIXED_BEARINGS = [];
-    for (let i = 0; i < 8; i++) {
-      // -π .. π in 8 steps (45° each). atan2's range matches.
-      FIXED_BEARINGS.push(-Math.PI + (i * Math.PI / 4));
-    }
+    // Four cardinal ring nodes (E / S / W / N) with a fatter radius. The
+    // earlier 8-node ring + radius 60 produced 8 short arcs of length ~47 —
+    // queueing cars stacked up on each tiny segment, the ring filled
+    // instantly, and what the player saw was a swirl of cars "going round
+    // multiple times before they could leave." Roads are axis-aligned now
+    // (v29 dropped the 45° escape hatch) so 4 cardinal nodes is plenty;
+    // diagonal approaches still snap to the nearest within 45°.
+    const FIXED_BEARINGS = [0, Math.PI / 2, Math.PI, -Math.PI / 2]; // E, S, W, N
     const ringNodes = FIXED_BEARINGS.map(bearing => ({
       node: makeNode(node.x + radius * Math.cos(bearing), node.y + radius * Math.sin(bearing)),
       bearing
@@ -1082,8 +1078,10 @@
       e.length = polyLen(e.shape);
     }
 
-    // Build the ring as 8 one-way arcs counterclockwise (no reverse twins —
-    // that's what enforces single-direction roundabout flow).
+    // Build the ring as 4 one-way arcs (no reverse twins — that's what
+    // enforces single-direction roundabout flow). Each arc is a 90° quarter
+    // circle, ≈141 world units long at radius 90 — plenty of room for
+    // multiple cars without bottlenecking.
     ringNodes.sort((a, b) => b.bearing - a.bearing);
     for (let i = 0; i < ringNodes.length; i++) {
       const a = ringNodes[i].node;
@@ -1460,16 +1458,34 @@
       }
     }
 
+    // O(1) lookups for the per-frame loops below. Rebuilding once per step
+    // is cheap; the alternative (state.blocks.find inside hot loops) was
+    // O(blocks*cars) per frame and dominated lag in cities with 50+
+    // buildings and 200+ cars.
+    const blockById = new Map();
+    for (const b of state.blocks) blockById.set(b.id, b);
+    const entryById = new Map();
+    for (const e of state.entries) entryById.set(e.id, e);
+
     // Move cars.
     const byEdge = new Map();
     for (const c of state.cars) {
       const e = c.path[c.pathIdx];
-      if (!byEdge.has(e.id)) byEdge.set(e.id, []);
-      byEdge.get(e.id).push(c);
+      let arr = byEdge.get(e.id);
+      if (!arr) { arr = []; byEdge.set(e.id, arr); }
+      arr.push(c);
     }
-    for (const arr of byEdge.values()) arr.sort((a, b) => a.pos - b.pos);
+    // Sort each edge's cars by pos AND cache each car's index in its list,
+    // so the per-car leader lookup below is O(1) instead of an indexOf scan.
+    for (const arr of byEdge.values()) {
+      arr.sort((a, b) => a.pos - b.pos);
+      for (let i = 0; i < arr.length; i++) {
+        arr[i]._idx = i;
+        arr[i]._lane = arr;
+      }
+    }
 
-    const toRemove = [];
+    const toRemove = new Set();
     for (const car of state.cars) {
       // Parked at a block — count as stopped until pauseUntil expires.
       if (car.pauseUntil && state.time < car.pauseUntil) {
@@ -1498,8 +1514,8 @@
       }
 
       const e = car.path[car.pathIdx];
-      const list = byEdge.get(e.id) || [];
-      const myIdx = list.indexOf(car);
+      const list = car._lane || byEdge.get(e.id) || [];
+      const myIdx = (car._idx != null) ? car._idx : list.indexOf(car);
       const leader = myIdx >= 0 ? list[myIdx + 1] : null;
 
       let targetSpeed = car.maxSpeed;
@@ -1551,7 +1567,7 @@
           // Reached a building — park here for the type's dwell time, then head
           // out via a random exit.
           car.hasVisited = true;
-          const block = state.blocks.find(b => b.id === car.blockId);
+          const block = blockById.get(car.blockId);
           const dwell = block ? block.dwell : 2.2;
           car.pauseUntil = state.time + dwell;
           car.needsReroute = true;
@@ -1589,7 +1605,7 @@
           state.score += DELIVERY_POINTS;
           if (state.score > state.bestScore) state.bestScore = state.score;
           checkRecordBreak();
-          const exit = state.entries.find(ee => ee.id === car.sinkEntryId);
+          const exit = entryById.get(car.sinkEntryId);
           if (exit) {
             state.effects.push({ x: exit.x, y: exit.y, startTime: state.time, kind: 'deliver' });
             if (isGameMode()) {
@@ -1606,12 +1622,12 @@
             }
             Audio.chime('exit');
           }
-          toRemove.push(car);
+          toRemove.add(car);
         }
       }
-      if (car.stuckTime > 180) toRemove.push(car);
+      if (car.stuckTime > 180) toRemove.add(car);
     }
-    if (toRemove.length) state.cars = state.cars.filter(c => !toRemove.includes(c));
+    if (toRemove.size) state.cars = state.cars.filter(c => !toRemove.has(c));
 
     // Recompute per-building "incoming" car count for pressure-ring render.
     // An incoming car is one whose current destination is this block and it
@@ -1619,7 +1635,7 @@
     for (const b of state.blocks) b.incoming = 0;
     for (const c of state.cars) {
       if (c.destKind !== 'block' || c.hasVisited) continue;
-      const b = state.blocks.find(x => x.id === c.blockId);
+      const b = blockById.get(c.blockId);
       if (b) b.incoming++;
     }
 
@@ -2086,8 +2102,12 @@
   function drawDecor() {
     if (!state.decor) return;
     const s = state.view.scale;
+    const margin = 30;
+    const vw = state.view.w, vh = state.view.h;
     for (const d of state.decor) {
       const p = w2s(d.x, d.y);
+      if (p.sx < -margin || p.sx > vw + margin ||
+          p.sy < -margin || p.sy > vh + margin) continue;
       if (d.kind === 'tree') {
         // Soft shadow
         ctx.fillStyle = 'rgba(30, 35, 50, 0.12)';
@@ -2175,8 +2195,14 @@
   }
 
   function drawBlocks() {
+    const margin = 80;
+    const vw = state.view.w, vh = state.view.h;
     for (const b of state.blocks) {
       const p = w2s(b.x, b.y);
+      // Viewport cull — buildings outside the visible area are skipped.
+      // Park halo extends ±PARK_RADIUS so widen the margin for parks.
+      const m = b.type === 'park' ? margin + PARK_RADIUS * state.view.scale : margin;
+      if (p.sx < -m || p.sx > vw + m || p.sy < -m || p.sy > vh + m) continue;
       const s = state.view.scale;
       const type = b.type || 'shop';
       const sizeMul = b.size === 2 ? 1.5 : 1;
@@ -2768,11 +2794,17 @@
     const len = Math.max(20, 24 * scale);
     const wid = Math.max(11, 13 * scale);
     const corner = wid * 0.35;
+    // Viewport cull — skip cars completely off-screen. Big perf win at
+    // scale: a city with hundreds of cars only renders the visible ones.
+    const margin = 40;
+    const vw = state.view.w, vh = state.view.h;
 
     for (const car of state.cars) {
       const e = car.path[car.pathIdx];
       const p = sampleEdge(e, car.pos);
       const s = w2s(p.x, p.y);
+      if (s.sx < -margin || s.sx > vw + margin ||
+          s.sy < -margin || s.sy > vh + margin) continue;
       const angle = Math.atan2(p.hy, p.hx);
 
       ctx.save();
