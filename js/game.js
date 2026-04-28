@@ -13,6 +13,11 @@
   const LOGICAL_W = 1800;
   const LOGICAL_H = 2340;
   const GRID = 60;
+  // Rocky border width (world units) drawn OUTSIDE the play area (0..LOGICAL).
+  // Roads / buildings can never enter this band; the camera may show it but
+  // can't pan beyond it. Hard outside boundary makes the city a constrained
+  // canvas — every street and parking spot has to count.
+  const BORDER_W = 360;
 
   // Day/night cycle — one full day lasts DAY_LENGTH simulated seconds.
   // Keyframes interpolate the tint overlay colour + alpha across the day.
@@ -114,7 +119,7 @@
 
   // Build version — bumped on every ship; shown in the corner pill so the
   // user can see at a glance whether the page reloaded with a new build.
-  const VERSION = 'v37';
+  const VERSION = 'v38';
 
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
@@ -835,6 +840,15 @@
     ];
     if (polyLen(shape) < 40) return { ok: false, reason: 'Too short' };
 
+    // Hard map boundary — both endpoints must lie inside the play area.
+    // The visible rocky border (BORDER_W on each side) is impassable.
+    function inPlayArea(pt) {
+      return pt.x >= 0 && pt.x <= LOGICAL_W && pt.y >= 0 && pt.y <= LOGICAL_H;
+    }
+    if (!inPlayArea(shape[0]) || !inPlayArea(shape[shape.length - 1])) {
+      return { ok: false, reason: 'Stay within the city limits' };
+    }
+
     // Game mode — check funds before letting the road land.
     let cost = 0;
     if (isGameMode()) {
@@ -911,6 +925,10 @@
     const nodeSnap = (nodeSnapRaw && !blockedNodeIds.has(nodeSnapRaw.id)) ? nodeSnapRaw : null;
     const edgeSnap = !nodeSnap ? findNearestEdgePoint(wx, wy, sn.edge) : null;
 
+    // Hard map boundary — buildings must sit inside the play area.
+    if (wx < 0 || wx > LOGICAL_W || wy < 0 || wy > LOGICAL_H) {
+      return { ok: false, reason: 'Stay within the city limits' };
+    }
     // No buildings in the water — parks and houses both need dry ground.
     if (LEVEL.lakes) {
       for (const L of LEVEL.lakes) {
@@ -1785,6 +1803,7 @@
     state.view.scale = Math.min(sx, sy);
     state.view.originX = LOGICAL_W / 2;
     state.view.originY = LOGICAL_H / 2;
+    if (typeof clampCamera === 'function') clampCamera();
   }
 
   function w2s(x, y) {
@@ -1803,18 +1822,29 @@
   function render() {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // Parkland gradient — proper sage, warm enough to stay calm but now
-    // actually green. Darker than v25.
+    // Outside the play area is rocky terrain — muted slate fill underneath
+    // the mountain silhouette. Whole canvas first, then the play area on top.
     const cw = canvas.width, ch = canvas.height;
-    const grad = ctx.createRadialGradient(cw / 2, ch / 2, 0,
-                                          cw / 2, ch / 2, Math.max(cw, ch) * 0.75);
-    grad.addColorStop(0.0, '#d4dfae');
-    grad.addColorStop(0.55, '#bfcd93');
-    grad.addColorStop(1.0, '#a6b87a');
-    ctx.fillStyle = grad;
+    ctx.fillStyle = '#7d6a55';
     ctx.fillRect(0, 0, cw, ch);
     ctx.scale(state.view.dpr, state.view.dpr);
 
+    // Fill the play area itself with the parkland gradient (centred on the
+    // play area, not the screen, so the colour doesn't shift as you pan).
+    const tl = w2s(0, 0);
+    const br = w2s(LOGICAL_W, LOGICAL_H);
+    const playGrad = ctx.createRadialGradient(
+      (tl.sx + br.sx) / 2, (tl.sy + br.sy) / 2, 0,
+      (tl.sx + br.sx) / 2, (tl.sy + br.sy) / 2,
+      Math.max(br.sx - tl.sx, br.sy - tl.sy) * 0.7
+    );
+    playGrad.addColorStop(0.0, '#d4dfae');
+    playGrad.addColorStop(0.55, '#bfcd93');
+    playGrad.addColorStop(1.0, '#a6b87a');
+    ctx.fillStyle = playGrad;
+    ctx.fillRect(tl.sx, tl.sy, br.sx - tl.sx, br.sy - tl.sy);
+
+    drawBorderMountains();
     drawGrid();
     drawLakes();
     drawDecor();
@@ -2046,6 +2076,144 @@
   const GRASS_TINTS = ['rgba(132,165,110,0.5)', 'rgba(118,155,95,0.5)',
                        'rgba(145,175,120,0.55)', 'rgba(108,145,90,0.5)'];
   const FLOWER_TINTS = ['#db6d51', '#e8a13a', '#c65893', '#6a9f4a', '#a065c3'];
+
+  // Lazy-built deterministic mountain silhouette around the play area.
+  // Rebuilt once on first call (and on map resize); rendered every frame
+  // by walking the cached point list.
+  let _borderPeaks = null;
+  function buildBorderPeaks() {
+    _borderPeaks = { top: [], right: [], bottom: [], left: [] };
+    let s = 9001;
+    const rand = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+    // Peak spacing along each edge — varied widths give an organic skyline.
+    function genEdge(length, baseHeight) {
+      const peaks = [];
+      let x = -BORDER_W * 0.5;
+      while (x < length + BORDER_W * 0.5) {
+        const w = 60 + rand() * 110;
+        const h = baseHeight * (0.55 + rand() * 0.55);   // 55%–110% of full
+        peaks.push({ x, w, h, snow: rand() < 0.45 });
+        x += w * (0.55 + rand() * 0.25);  // overlap so silhouette is continuous
+      }
+      return peaks;
+    }
+    _borderPeaks.top    = genEdge(LOGICAL_W, BORDER_W * 0.85);
+    _borderPeaks.bottom = genEdge(LOGICAL_W, BORDER_W * 0.85);
+    _borderPeaks.left   = genEdge(LOGICAL_H, BORDER_W * 0.85);
+    _borderPeaks.right  = genEdge(LOGICAL_H, BORDER_W * 0.85);
+  }
+
+  function drawBorderMountains() {
+    if (!_borderPeaks) buildBorderPeaks();
+
+    // Helper — fill a triangle in world coords.
+    function tri(ax, ay, bx, by, cx, cy, fill) {
+      const a = w2s(ax, ay), b = w2s(bx, by), c = w2s(cx, cy);
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.moveTo(a.sx, a.sy);
+      ctx.lineTo(b.sx, b.sy);
+      ctx.lineTo(c.sx, c.sy);
+      ctx.closePath();
+      ctx.fill();
+    }
+    function snowTri(ax, ay, bx, by, cx, cy) {
+      const a = w2s(ax, ay), b = w2s(bx, by), c = w2s(cx, cy);
+      ctx.fillStyle = 'rgba(245, 248, 252, 0.85)';
+      ctx.beginPath();
+      ctx.moveTo(a.sx, a.sy);
+      ctx.lineTo(b.sx, b.sy);
+      ctx.lineTo(c.sx, c.sy);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Two-tone stone — back row darker, front row lighter; gives depth.
+    const back = '#4a3f37';
+    const front = '#6c5d51';
+
+    // TOP edge — peaks point UP (into negative y).
+    for (let pass = 0; pass < 2; pass++) {
+      const fill = pass === 0 ? back : front;
+      const yOff = pass === 0 ? -10 : 20;
+      for (const p of _borderPeaks.top) {
+        const baseY = 0 + yOff;
+        const apexY = -p.h - yOff * 0.5;
+        const x0 = p.x, x1 = p.x + p.w;
+        const apexX = (x0 + x1) / 2;
+        tri(x0, baseY, x1, baseY, apexX, apexY, fill);
+        if (pass === 1 && p.snow) {
+          // Snow cap on the top 30% of the peak.
+          const t = 0.30;
+          const lx = x0 + (apexX - x0) * (1 - t);
+          const ly = baseY + (apexY - baseY) * (1 - t);
+          const rx = x1 + (apexX - x1) * (1 - t);
+          const ry = baseY + (apexY - baseY) * (1 - t);
+          snowTri(lx, ly, rx, ry, apexX, apexY);
+        }
+      }
+    }
+    // BOTTOM edge — peaks point DOWN (positive y past LOGICAL_H).
+    for (let pass = 0; pass < 2; pass++) {
+      const fill = pass === 0 ? back : front;
+      const yOff = pass === 0 ? 10 : -20;
+      for (const p of _borderPeaks.bottom) {
+        const baseY = LOGICAL_H + yOff;
+        const apexY = LOGICAL_H + p.h - yOff * 0.5;
+        const x0 = p.x, x1 = p.x + p.w;
+        const apexX = (x0 + x1) / 2;
+        tri(x0, baseY, x1, baseY, apexX, apexY, fill);
+        if (pass === 1 && p.snow) {
+          const t = 0.30;
+          const lx = x0 + (apexX - x0) * (1 - t);
+          const ly = baseY + (apexY - baseY) * (1 - t);
+          const rx = x1 + (apexX - x1) * (1 - t);
+          const ry = baseY + (apexY - baseY) * (1 - t);
+          snowTri(lx, ly, rx, ry, apexX, apexY);
+        }
+      }
+    }
+    // LEFT edge — peaks point LEFT (negative x).
+    for (let pass = 0; pass < 2; pass++) {
+      const fill = pass === 0 ? back : front;
+      const xOff = pass === 0 ? -10 : 20;
+      for (const p of _borderPeaks.left) {
+        const baseX = 0 + xOff;
+        const apexX = -p.h - xOff * 0.5;
+        const y0 = p.x, y1 = p.x + p.w;
+        const apexY = (y0 + y1) / 2;
+        tri(baseX, y0, baseX, y1, apexX, apexY, fill);
+        if (pass === 1 && p.snow) {
+          const t = 0.30;
+          const ly = y0 + (apexY - y0) * (1 - t);
+          const lx = baseX + (apexX - baseX) * (1 - t);
+          const ry = y1 + (apexY - y1) * (1 - t);
+          const rx = baseX + (apexX - baseX) * (1 - t);
+          snowTri(lx, ly, rx, ry, apexX, apexY);
+        }
+      }
+    }
+    // RIGHT edge — peaks point RIGHT (past LOGICAL_W).
+    for (let pass = 0; pass < 2; pass++) {
+      const fill = pass === 0 ? back : front;
+      const xOff = pass === 0 ? 10 : -20;
+      for (const p of _borderPeaks.right) {
+        const baseX = LOGICAL_W + xOff;
+        const apexX = LOGICAL_W + p.h - xOff * 0.5;
+        const y0 = p.x, y1 = p.x + p.w;
+        const apexY = (y0 + y1) / 2;
+        tri(baseX, y0, baseX, y1, apexX, apexY, fill);
+        if (pass === 1 && p.snow) {
+          const t = 0.30;
+          const ly = y0 + (apexY - y0) * (1 - t);
+          const lx = baseX + (apexX - baseX) * (1 - t);
+          const ry = y1 + (apexY - y1) * (1 - t);
+          const rx = baseX + (apexX - baseX) * (1 - t);
+          snowTri(lx, ly, rx, ry, apexX, apexY);
+        }
+      }
+    }
+  }
 
   // Static water features — pretty calm pools the city has to route around
   // (or bridge over). Drawn between the ground and decor so the trees / grass
@@ -2368,9 +2536,13 @@
     ctx.fillRect(cx + 7.5 * s, cy + 35.5 * s, 1.5 * s, 3 * s);
   }
 
-  const HOUSE_BODY = ['#f0dbb2', '#ecd1a7', '#e9c899', '#eed7b3', '#e2c29a', '#f2e0ba'];
-  const HOUSE_ROOF = ['#8a5c3e', '#7d4f2f', '#94633e', '#80513a', '#a06846'];
-  const SHOP_AWNING = ['#db6d51', '#c74a3d', '#d6a05a', '#4fa16a', '#5987c2'];
+  // Brighter, more saturated body palette than v32 — the previous beige-only
+  // colours read as 1980s greyscale at zoom-out. Now buildings come in mint,
+  // rose, blue, butter-yellow, lavender etc. so a neighbourhood looks like
+  // a colourful village rather than a row of tan blocks.
+  const HOUSE_BODY = ['#f4d18a', '#a8d8c4', '#f5b9b4', '#c2c8e8', '#fce18f', '#dab8e3', '#ffd5b4', '#b9e0a3'];
+  const HOUSE_ROOF = ['#c14d3a', '#8a5c3e', '#5b7f9c', '#a35a72', '#3f7a5b', '#7a4f8a'];
+  const SHOP_AWNING = ['#db6d51', '#c74a3d', '#d6a05a', '#4fa16a', '#5987c2', '#a065c3', '#e8a13a'];
 
   // Cheap pseudo-random hash for seeded sprig placement on plots.
   function seedHash(n) {
@@ -2408,11 +2580,10 @@
   }
 
   function drawHouse(cx, cy, s, seed = 0) {
-    // v31 — bigger garden so houses feel like proper residences with room
-    // to breathe, not crammed-together blocks. Plot is ~70 world units
-    // wide; adjacent grid placements (60 apart) blend their lawns into
-    // continuous green which reads as a neighbourhood rather than a wall.
-    const plotR = 35 * s;
+    // v38 — bumped from plotR 35 to 46 so a house clearly outweighs a
+    // car visually (was looking 80s-tiny at zoom-out). Adjacent grid-step
+    // placements still blend their lawns into a continuous neighbourhood.
+    const plotR = 46 * s;
     // Soft hedge-darker base under the lawn for depth.
     ctx.fillStyle = '#9bbf6d';
     ctx.beginPath();
@@ -2473,41 +2644,54 @@
     ctx.ellipse(cx, cy + 16 * s, 22 * s, 5 * s, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    const w = 44 * s, h = 38 * s;
-    const bodyTop = cy - h / 2 + 8 * s;
+    const w = 60 * s, h = 52 * s;
+    const bodyTop = cy - h / 2 + 11 * s;
     const bodyBot = cy + h / 2;
     const bodyCol = HOUSE_BODY[seed % HOUSE_BODY.length];
     const roofCol = HOUSE_ROOF[seed % HOUSE_ROOF.length];
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
+    ctx.strokeStyle = 'rgba(30, 35, 50, 0.65)';
     ctx.lineWidth = 1.5;
 
     // Chimney first — rendered behind the roof.
-    const cxOff = 10 * s;
+    const cxOff = 14 * s;
     ctx.fillStyle = '#7a5032';
     ctx.beginPath();
-    ctx.rect(cx + cxOff, cy - h / 2 - 10 * s, 6 * s, 10 * s);
+    ctx.rect(cx + cxOff, cy - h / 2 - 12 * s, 7 * s, 12 * s);
     ctx.fill(); ctx.stroke();
 
-    // Pitched roof
+    // Pitched roof — front face + a darker side face suggests volume.
     ctx.fillStyle = roofCol;
     ctx.beginPath();
-    ctx.moveTo(cx - w / 2 - 4 * s, bodyTop);
-    ctx.lineTo(cx, cy - h / 2 - 10 * s);
-    ctx.lineTo(cx + w / 2 + 4 * s, bodyTop);
+    ctx.moveTo(cx - w / 2 - 5 * s, bodyTop);
+    ctx.lineTo(cx, cy - h / 2 - 12 * s);
+    ctx.lineTo(cx + w / 2 + 5 * s, bodyTop);
     ctx.closePath();
     ctx.fill(); ctx.stroke();
+    // Right-side roof face — slightly darker, slight overlap of the apex.
+    ctx.fillStyle = shadeColor(roofCol, -0.18);
+    ctx.beginPath();
+    ctx.moveTo(cx + w / 2 + 5 * s, bodyTop);
+    ctx.lineTo(cx, cy - h / 2 - 12 * s);
+    ctx.lineTo(cx + w / 2 + 5 * s, bodyTop + 1 * s);
+    ctx.closePath();
+    ctx.fill();
 
-    // Body
+    // Body — flat front face with a subtle right-side shadow strip for depth.
     ctx.fillStyle = bodyCol;
     ctx.beginPath();
     roundedRect(cx - w / 2, bodyTop, w, bodyBot - bodyTop, 3 * s);
     ctx.fill(); ctx.stroke();
+    // Right-side darker face — gives a "lit from the upper-left" feel.
+    ctx.fillStyle = shadeColor(bodyCol, -0.18);
+    ctx.beginPath();
+    roundedRect(cx + w / 2 - 6 * s, bodyTop, 6 * s, bodyBot - bodyTop, 3 * s);
+    ctx.fill();
 
     // Door
     ctx.fillStyle = '#6b4a2f';
     ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
     ctx.lineWidth = 1;
-    const dw = 9 * s, dh = 13 * s;
+    const dw = 12 * s, dh = 18 * s;
     ctx.beginPath();
     ctx.moveTo(cx - dw / 2, bodyBot);
     ctx.lineTo(cx - dw / 2, bodyBot - dh + 2 * s);
@@ -2520,26 +2704,34 @@
     // Door knob
     ctx.fillStyle = '#d4b04a';
     ctx.beginPath();
-    ctx.arc(cx + dw / 2 - 2 * s, bodyBot - dh / 2, Math.max(0.8, 1.1 * s), 0, Math.PI * 2);
+    ctx.arc(cx + dw / 2 - 2.5 * s, bodyBot - dh / 2, Math.max(0.9, 1.4 * s), 0, Math.PI * 2);
     ctx.fill();
 
-    // Windows with cross mullions.
-    const ww = 8 * s, wh = 8 * s;
-    const winY = bodyTop + 5 * s;
-    const wins = [ { x: cx - 15 * s }, { x: cx + 7 * s } ];
+    // Windows with cross mullions and warm glow tint.
+    const ww = 11 * s, wh = 11 * s;
+    const winY = bodyTop + 7 * s;
+    const wins = [ { x: cx - 21 * s }, { x: cx + 10 * s } ];
     for (const win of wins) {
-      ctx.fillStyle = 'rgba(220, 235, 250, 0.88)';
-      ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
+      ctx.fillStyle = 'rgba(255, 240, 200, 0.95)';   // warm glow
+      ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.rect(win.x, winY, ww, wh);
       ctx.fill(); ctx.stroke();
       // Mullions
-      ctx.strokeStyle = 'rgba(30, 35, 50, 0.45)';
+      ctx.strokeStyle = 'rgba(30, 35, 50, 0.5)';
       ctx.beginPath();
       ctx.moveTo(win.x + ww / 2, winY); ctx.lineTo(win.x + ww / 2, winY + wh);
       ctx.moveTo(win.x, winY + wh / 2); ctx.lineTo(win.x + ww, winY + wh / 2);
       ctx.stroke();
+      // Window-sill flower box — small green box with red dots.
+      ctx.fillStyle = '#7a5230';
+      ctx.fillRect(win.x - 1 * s, winY + wh, ww + 2 * s, 2 * s);
+      ctx.fillStyle = '#e85871';
+      ctx.beginPath();
+      ctx.arc(win.x + 2 * s, winY + wh + 1 * s, 1 * s, 0, Math.PI * 2);
+      ctx.arc(win.x + ww - 2 * s, winY + wh + 1 * s, 1 * s, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 
@@ -2547,10 +2739,10 @@
     // Plaza plot — slightly warmer / sandier than a house garden so shops
     // read as "commercial". Same footprint, so placement intuitions
     // transfer between building types.
-    drawPlot(cx, cy, 28 * s, '#dcd1b3',
+    drawPlot(cx, cy, 40 * s, '#dcd1b3',
              ['#a89880', '#8a7d65', '#bfa988', '#7d8a72'], seed + 100);
 
-    const w = 46 * s, h = 42 * s;
+    const w = 64 * s, h = 58 * s;
     const awning = SHOP_AWNING[seed % SHOP_AWNING.length];
     const awningDark = shadeColor(awning, -0.15);
     ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
@@ -2630,7 +2822,7 @@
   }
 
   function drawMall(cx, cy, s) {
-    const w = 80 * s, h = 56 * s;
+    const w = 110 * s, h = 76 * s;
     ctx.strokeStyle = 'rgba(30, 35, 50, 0.65)';
     ctx.lineWidth = 1.5;
 
@@ -3129,6 +3321,23 @@
     const after = s2w(mx, my);
     state.view.originX += before.x - after.x;
     state.view.originY += before.y - after.y;
+    clampCamera();
+  }
+
+  // Hard camera clamp — keeps the visible viewport inside the visual world
+  // (play area + rocky border on every side). At extreme zoom-out the world
+  // becomes smaller than the viewport, so we centre it instead of clamping.
+  function clampCamera() {
+    const halfW = state.view.w / 2 / state.view.scale;
+    const halfH = state.view.h / 2 / state.view.scale;
+    const minX = -BORDER_W, maxX = LOGICAL_W + BORDER_W;
+    const minY = -BORDER_W, maxY = LOGICAL_H + BORDER_W;
+    const worldW = maxX - minX;
+    const worldH = maxY - minY;
+    if (halfW * 2 >= worldW) state.view.originX = (minX + maxX) / 2;
+    else state.view.originX = Math.max(minX + halfW, Math.min(maxX - halfW, state.view.originX));
+    if (halfH * 2 >= worldH) state.view.originY = (minY + maxY) / 2;
+    else state.view.originY = Math.max(minY + halfH, Math.min(maxY - halfH, state.view.originY));
   }
 
   function onPointerDown(e) {
@@ -3217,6 +3426,7 @@
         const dy = (newMid.y - state.pinch.mid.y) / state.view.scale;
         state.view.originX -= dx;
         state.view.originY -= dy;
+        clampCamera();
       }
 
       state.pinch.dist = newDist;
@@ -3268,6 +3478,7 @@
       const dy = (my - state.panFrom.my) / state.view.scale;
       state.view.originX = state.panFrom.ox - dx;
       state.view.originY = state.panFrom.oy - dy;
+      clampCamera();
     } else {
       state.hover = { node: findNearestNode(world.x, world.y, 30) };
     }
@@ -3353,8 +3564,12 @@
       // Park is decorative — it doesn't need a road. Keep the legacy
       // grid-snap-on-tap behaviour for it.
       if (state.tool === 'park') {
-        const pt = snapToGrid(world.x, world.y);
-        const res = placeBlock(pt.x, pt.y, 'park');
+        // Place at the exact tap position — the v32 grid-snap drifted the
+        // park up to ~30 units away from where the player tapped, which
+        // felt "off." MIN_BLOCK_DIST still keeps parks from overlapping;
+        // adjacent parks tile naturally because the player typically taps
+        // close to grid lines anyway.
+        const res = placeBlock(world.x, world.y, 'park');
         if (!res.ok) return toast(res.reason);
         Audio.placeBuilding();
         toast(res.usedCivicCredit ? 'Free Park placed (civic credit)' : 'Park placed');

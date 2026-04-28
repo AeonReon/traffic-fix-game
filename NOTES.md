@@ -101,6 +101,33 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-28 — v38 (rocky map border + bigger / brighter buildings + WYSIWYG parks)** —
+  Big "make it look like a real city" pass. **(1) Hard map boundary** —
+  the world now has explicit edges. The camera is clamped (`clampCamera`)
+  so the player cannot pan past `LOGICAL_W × LOGICAL_H` plus a 360-unit
+  rocky border, and `addRoad` / `placeBlock` reject anything whose
+  endpoint falls outside the play area ("Stay within the city limits").
+  This kills the lag-from-infinite-pan failure mode AND turns the game
+  into a real optimisation puzzle: you only have so much space, every
+  road and parking spot has to count. **(2) Mountain silhouette border**
+  — `drawBorderMountains` paints a two-tone (back/front) jagged peak
+  ring around the play area, with random snow caps on roughly half of
+  them. The skyline is seeded at boot so it reads the same every
+  session. The whole canvas underneath is filled with a slate "rocky
+  terrain" colour outside the play area, with the parkland gradient
+  filled inside the world rect. **(3) Buildings 1.3-1.5× bigger and
+  much more colourful** — house body 44×38 → 60×52 with plotR 35 → 46;
+  shop 46×42 → 64×58 with plotR 28 → 40; mall 80×56 → 110×76. The
+  HOUSE_BODY palette went from beige-only to a colourful 8-swatch mix
+  (mint, rose, butter-yellow, lavender, peach, pale-green, dusty-blue),
+  giving a row of houses the look of a colourful village rather than
+  greyscale 80s tract homes. House drawing now has a darker right-side
+  shadow strip on the body and roof for a "lit-from-upper-left" sense
+  of volume, plus warm-yellow window glow and a tiny window-box flower
+  detail. **(4) Park tap is now WYSIWYG** — the grid-snap that pulled
+  parks up to ~30 units away from the tap point is gone; parks land
+  exactly where you tap. MIN_BLOCK_DIST still prevents overlap with
+  other building types.
 - **2026-04-27 — v37 (looser roundabouts + perf pass)** — Two fixes for
   the late-game friction. **(1) Roundabout flow rebuild** — old ring was
   8 nodes at radius 60 (8 short arcs of length ~47), and queueing cars
