@@ -101,6 +101,33 @@ Update this list whenever a user-visible feature ships or is cut.
 
 Newest at the top. One line per deploy.
 
+- **2026-04-28 — v39 (Mini-Motorways-style flat-design pass)** — The
+  "1980s greyscale" complaint, addressed wholesale. Whole render pipeline
+  rebuilt around solid colour blocks, big drop shadows, and zero
+  micro-detail. Driven by a single `COL` palette so the look stays
+  coherent. **Background**: solid warm amber (`#f4ba56`) for the play
+  area with a deeper amber (`#d98a36`) outside; no more radial gradient,
+  no mountain triangles. The play area itself sits on the desert with a
+  soft offset shadow so the city floor reads as a paper card on
+  parchment. **Decor**: stripped grass tufts and flower clusters
+  entirely (they read as noise); kept only sparse solid green tree dots
+  with a single offset shadow each, plus a few flat sand patches in the
+  border zone. **Buildings**: every type rebuilt as a `flatBlock(cx, cy,
+  w, h, fill, radius)` — solid colour rounded rectangle with a single
+  offset drop shadow (the signature MM look). Bigger sizes too: house
+  78×78 (was 60×52), shop 92×92 (was 64×58), mall 130×130 (was
+  110×76), park 100×100. Each carries one icon: house = 2 dots + a
+  pin, shop = 3 customer dots + a white pin, mall = 5 dots + a big
+  white pin badge, park = 3 dark-green tree blobs. **Roads**: single
+  solid slate slab; the dashed centre stripe and the layered double
+  fill are gone. **Cars**: shrunk and simplified to a small solid
+  rounded rectangle with a soft drop shadow — no windshield / wheels /
+  headlights. **Lakes**: flat teal with a darker rim and one shimmer
+  crescent; ripples and gradients removed. **Spacing**: type-aware
+  `minDistFor(a, b)` — bigger blocks need more clearance (mall 110,
+  shop 80, others 70) but adjacent parks still tile at 56 to merge
+  into "park zones." Net: the canvas now reads as a Mini-Motorways-
+  style flat-illustration city, not a 1980s render.
 - **2026-04-28 — v38 (rocky map border + bigger / brighter buildings + WYSIWYG parks)** —
   Big "make it look like a real city" pass. **(1) Hard map boundary** —
   the world now has explicit edges. The camera is clamped (`clampCamera`)

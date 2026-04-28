@@ -119,7 +119,7 @@
 
   // Build version — bumped on every ship; shown in the corner pill so the
   // user can see at a glance whether the page reloaded with a new build.
-  const VERSION = 'v38';
+  const VERSION = 'v39';
 
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
@@ -955,17 +955,18 @@
     const visualX = opts.visualPos ? opts.visualPos.x : node.x;
     const visualY = opts.visualPos ? opts.visualPos.y : node.y;
 
-    // Visual / footprint check — minimum spacing measured against drawn
-    // positions so two houses on opposite sides of one road don't collide.
-    // Park-vs-park is given a smaller minimum so parks can tile into the
-    // "park zones" the user asked for: lawns merge into one continuous
-    // green carpet instead of bouncing apart.
-    const MIN_BLOCK_DIST = GRID - 4;   // 56 — adjacent grid cells (60 apart) pass
-    const PARK_PARK_MIN_DIST = 56;     // exact grid-step apart, enough for shared lawn
+    // Type-aware minimum spacing. Bigger blocks need more clearance, but
+    // park-vs-park stays loose so adjacent parks tile into one big green
+    // zone (the lawns share the same fill).
+    function minDistFor(a, b) {
+      if (a === 'park' && b === 'park') return 56;
+      if (a === 'mall' || b === 'mall') return 110;
+      if (a === 'shop' || b === 'shop') return 80;
+      return 70;
+    }
     for (const b of state.blocks) {
       const d = Math.hypot(b.x - visualX, b.y - visualY);
-      const minD = (type === 'park' && b.type === 'park') ? PARK_PARK_MIN_DIST : MIN_BLOCK_DIST;
-      if (d < minD) {
+      if (d < minDistFor(type, b.type)) {
         return { ok: false, reason: 'Too close to another building' };
       }
     }
@@ -1822,32 +1823,26 @@
   function render() {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // Outside the play area is rocky terrain — muted slate fill underneath
-    // the mountain silhouette. Whole canvas first, then the play area on top.
+    // Outside the play area is "desert" — one bold solid colour, no gradient.
+    // Mini-Motorways-style flat-design pass: the canvas is now built from
+    // bold colour zones with shapes overlaid, not subtle gradients with
+    // filigree on top.
     const cw = canvas.width, ch = canvas.height;
-    ctx.fillStyle = '#7d6a55';
+    ctx.fillStyle = COL.borderDesert;
     ctx.fillRect(0, 0, cw, ch);
     ctx.scale(state.view.dpr, state.view.dpr);
 
-    // Fill the play area itself with the parkland gradient (centred on the
-    // play area, not the screen, so the colour doesn't shift as you pan).
+    // Solid amber play area, with a darker drop-shadow edge so the city
+    // floor reads as a paper card sitting on the desert.
     const tl = w2s(0, 0);
     const br = w2s(LOGICAL_W, LOGICAL_H);
-    const playGrad = ctx.createRadialGradient(
-      (tl.sx + br.sx) / 2, (tl.sy + br.sy) / 2, 0,
-      (tl.sx + br.sx) / 2, (tl.sy + br.sy) / 2,
-      Math.max(br.sx - tl.sx, br.sy - tl.sy) * 0.7
-    );
-    playGrad.addColorStop(0.0, '#d4dfae');
-    playGrad.addColorStop(0.55, '#bfcd93');
-    playGrad.addColorStop(1.0, '#a6b87a');
-    ctx.fillStyle = playGrad;
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.fillRect(tl.sx + 6, tl.sy + 10, br.sx - tl.sx, br.sy - tl.sy);
+    ctx.fillStyle = COL.playGround;
     ctx.fillRect(tl.sx, tl.sy, br.sx - tl.sx, br.sy - tl.sy);
 
-    drawBorderMountains();
-    drawGrid();
-    drawLakes();
     drawDecor();
+    drawLakes();
     drawRoads();
     drawBlocks();
     drawEntries();
@@ -1886,17 +1881,12 @@
   function drawRoads() {
     const scale = state.view.scale;
 
-    // Pass 1 — non-bridge roads first (regular asphalt). Drawn underneath so
-    // bridges layer on top and clearly read as "above".
+    // Pass 1 — non-bridge roads. Single solid slate slab, no inner second
+    // pass: flat-design language, like Mini Motorways.
     for (const e of state.edges) {
       if (e.id % 2 === 0) continue;
       if (e.bridge) continue;
-      drawPolyline(e.shape, 26 * scale, '#1b1f2b');
-    }
-    for (const e of state.edges) {
-      if (e.id % 2 === 0) continue;
-      if (e.bridge) continue;
-      drawPolyline(e.shape, 22 * scale, '#2d3242');
+      drawPolyline(e.shape, 26 * scale, COL.road);
     }
 
     // Pass 2 — bridges, distinct warm stone colour with drop shadow + side
@@ -1941,20 +1931,8 @@
       ctx.restore();
     }
 
-    // Dashed centre stripe — only on two-way non-bridge roads.
-    ctx.save();
-    ctx.setLineDash([10 * scale, 12 * scale]);
-    ctx.lineCap = 'butt';
-    ctx.strokeStyle = 'rgba(255, 239, 210, 0.7)';
-    ctx.lineWidth = Math.max(1, 1.2 * scale);
-    for (const e of state.edges) {
-      if (e.id % 2 === 0) continue;
-      if (e.bridge) continue;
-      if (edgeIsOneWay(e)) continue;
-      drawPolyline(e.shape, 0, null, true);
-    }
-    ctx.setLineDash([]);
-    ctx.restore();
+    // Dashed centre stripe removed in v39 — flat-design pass keeps roads
+    // as plain solid slabs the way Mini Motorways does.
 
     // Direction chevrons — only on one-way edges (no twin).
     ctx.save();
@@ -2043,6 +2021,11 @@
   }
 
   function generateDecor() {
+    // v39 — flat-design pass. Stripped the grass tufts and flowers entirely
+    // (they read as 80s pixel-noise) and kept only sparse tree blobs, plus
+    // a few "sand" patches in the desert outside the play area to break up
+    // the flat amber. Trees are simple solid circles + soft shadow, like
+    // the trees in Mini Motorways.
     state.decor = [];
     let seed = 1337;
     const rand = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
@@ -2053,6 +2036,41 @@
       }
       return false;
     }
+    // Trees inside the play area — sparse so the amber ground reads cleanly.
+    const TREE_STEP = GRID * 3;
+    for (let x = TREE_STEP; x < LOGICAL_W; x += TREE_STEP) {
+      for (let y = TREE_STEP; y < LOGICAL_H; y += TREE_STEP) {
+        if (rand() > 0.55) continue;
+        const dx = (rand() - 0.5) * 60;
+        const dy = (rand() - 0.5) * 60;
+        if (inAnyLake(x + dx, y + dy)) continue;
+        state.decor.push({
+          x: x + dx, y: y + dy,
+          kind: 'tree',
+          size: 1.0 + rand() * 0.5
+        });
+      }
+    }
+    // A handful of "sand" patches in the surrounding desert — flat
+    // rounded blobs in a slightly lighter amber, gives the border zone
+    // some shape without going back to mountains.
+    const PAD = 80;
+    for (let i = 0; i < 24; i++) {
+      const side = i % 4;
+      let x, y;
+      if (side === 0) { x = -BORDER_W + PAD + rand() * (LOGICAL_W + 2 * BORDER_W - 2 * PAD); y = -BORDER_W + PAD + rand() * (BORDER_W - 2 * PAD); }
+      else if (side === 1) { x = -BORDER_W + PAD + rand() * (LOGICAL_W + 2 * BORDER_W - 2 * PAD); y = LOGICAL_H + PAD + rand() * (BORDER_W - 2 * PAD); }
+      else if (side === 2) { x = -BORDER_W + PAD + rand() * (BORDER_W - 2 * PAD); y = -BORDER_W + PAD + rand() * (LOGICAL_H + 2 * BORDER_W - 2 * PAD); }
+      else { x = LOGICAL_W + PAD + rand() * (BORDER_W - 2 * PAD); y = -BORDER_W + PAD + rand() * (LOGICAL_H + 2 * BORDER_W - 2 * PAD); }
+      state.decor.push({
+        x, y, kind: 'sand',
+        size: 60 + rand() * 90
+      });
+    }
+    // Stub out the old grass-tuft loop (kept here as a no-op so existing
+    // saves that referenced state.decor schema don't break — decor isn't
+    // serialised but a tidy guard).
+    if (false)
     for (let x = GRID; x < LOGICAL_W; x += GRID) {
       for (let y = GRID; y < LOGICAL_H; y += GRID) {
         if (rand() > 0.14) continue;
@@ -2077,9 +2095,33 @@
                        'rgba(145,175,120,0.55)', 'rgba(108,145,90,0.5)'];
   const FLOWER_TINTS = ['#db6d51', '#e8a13a', '#c65893', '#6a9f4a', '#a065c3'];
 
-  // Lazy-built deterministic mountain silhouette around the play area.
-  // Rebuilt once on first call (and on map resize); rendered every frame
-  // by walking the cached point list.
+  // Mini-Motorways-style flat colour palette. Saturated, high-contrast,
+  // few colours — the whole game is built from these.
+  const COL = {
+    playGround:     '#f4ba56',   // warm golden ground (the city's "floor")
+    borderDesert:   '#d98a36',   // deeper amber outside the play area
+    borderShadow:   'rgba(0,0,0,0.18)',
+    road:           '#3a4252',
+    roadStripe:     'rgba(255, 244, 220, 0.85)',
+    bridge:         '#e0c79a',
+    bridgeFrame:    '#7a5a32',
+    house:    ['#f87a8e','#75c8a2','#8da4e8','#f6c34a','#cc8de0','#f0a35c','#7ec5e0','#c5d670'],
+    houseRoof:'#39414f',
+    shop:     ['#ed5a52','#3a86cf','#3aa57a','#e89a3a','#a05cc4','#d44a8c'],
+    mall:     '#5673b6',
+    mallSign: '#3a4252',
+    park:     '#7fb95a',
+    parkDark: '#5e9a44',
+    lake:     '#9bd4e0',
+    lakeRim:  '#7ab4c4',
+    tree:     '#6eaa6a',
+    treeShadow: 'rgba(0,0,0,0.12)',
+    blockShadow: 'rgba(0,0,0,0.22)',
+    sand:     '#f0a55c'
+  };
+
+  // Lazy-built deterministic decorative dots around the play area.
+  // (Mountain peaks were too noisy — replaced with flat zones.)
   let _borderPeaks = null;
   function buildBorderPeaks() {
     _borderPeaks = { top: [], right: [], bottom: [], left: [] };
@@ -2215,112 +2257,69 @@
     }
   }
 
-  // Static water features — pretty calm pools the city has to route around
-  // (or bridge over). Drawn between the ground and decor so the trees / grass
-  // tufts inside the radius stay hidden behind the water.
+  // Flat-design lakes — a solid teal disc with a darker rim and a single
+  // soft white shimmer. No animated ripples, no gradients beyond a thin
+  // shore: keeps everything reading as paper-cutout rather than 3D drone.
   function drawLakes() {
     if (!LEVEL.lakes || !LEVEL.lakes.length) return;
     const s = state.view.scale;
     for (const L of LEVEL.lakes) {
       const c = w2s(L.cx, L.cy);
       const rPx = L.r * s;
-      // Soft outer halo — moisture / shore line, gives the water a gentle
-      // edge instead of a hard circle.
-      const grad = ctx.createRadialGradient(c.sx, c.sy, rPx * 0.6, c.sx, c.sy, rPx * 1.05);
-      grad.addColorStop(0, 'rgba(120, 175, 195, 1)');
-      grad.addColorStop(0.85, 'rgba(120, 175, 195, 1)');
-      grad.addColorStop(1, 'rgba(120, 175, 195, 0)');
-      ctx.fillStyle = grad;
+      ctx.fillStyle = COL.lakeRim;
       ctx.beginPath();
-      ctx.arc(c.sx, c.sy, rPx * 1.05, 0, Math.PI * 2);
+      ctx.arc(c.sx, c.sy, rPx + 4 * s, 0, Math.PI * 2);
       ctx.fill();
-      // Main water body — slightly darker teal inside.
-      const water = ctx.createRadialGradient(c.sx - rPx * 0.25, c.sy - rPx * 0.25, rPx * 0.1,
-                                              c.sx, c.sy, rPx);
-      water.addColorStop(0, '#a8d2dd');
-      water.addColorStop(0.6, '#6f9fb6');
-      water.addColorStop(1, '#557f95');
-      ctx.fillStyle = water;
+      ctx.fillStyle = COL.lake;
       ctx.beginPath();
       ctx.arc(c.sx, c.sy, rPx, 0, Math.PI * 2);
       ctx.fill();
-      // Subtle highlight curve — a single soft arc reads as "shimmer."
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-      ctx.lineWidth = Math.max(1, 1.2 * s);
+      // Single soft white shimmer crescent.
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.lineWidth = Math.max(2, 2.5 * s);
+      ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.arc(c.sx - rPx * 0.18, c.sy - rPx * 0.18, rPx * 0.55, Math.PI * 0.85, Math.PI * 1.4);
+      ctx.arc(c.sx - rPx * 0.25, c.sy - rPx * 0.25, rPx * 0.55, Math.PI * 0.95, Math.PI * 1.35);
       ctx.stroke();
-      // Two thin ripple lines, gently animated by state.time so the water
-      // feels alive without distracting motion.
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-      ctx.lineWidth = Math.max(0.8, 0.9 * s);
-      const phase = (state.time * 0.5) % 1;
-      for (let i = 0; i < 2; i++) {
-        const t = (phase + i * 0.5) % 1;
-        const ripR = rPx * (0.35 + 0.4 * t);
-        ctx.globalAlpha = (1 - t) * 0.55;
-        ctx.beginPath();
-        ctx.arc(c.sx, c.sy, ripR, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
     }
   }
 
   function drawDecor() {
     if (!state.decor) return;
     const s = state.view.scale;
-    const margin = 30;
+    const margin = 80;
     const vw = state.view.w, vh = state.view.h;
+    // Pass 1 — sand patches (under everything else in the border zone).
     for (const d of state.decor) {
+      if (d.kind !== 'sand') continue;
+      const p = w2s(d.x, d.y);
+      const r = d.size * s;
+      if (p.sx + r < -margin || p.sx - r > vw + margin ||
+          p.sy + r < -margin || p.sy - r > vh + margin) continue;
+      ctx.fillStyle = COL.sand;
+      ctx.beginPath();
+      ctx.ellipse(p.sx, p.sy, r, r * 0.65, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Pass 2 — trees: solid green disc with a soft offset shadow. No
+    // pixelly highlights, no veins; the flat-design language asks for
+    // simple silhouettes.
+    for (const d of state.decor) {
+      if (d.kind !== 'tree') continue;
       const p = w2s(d.x, d.y);
       if (p.sx < -margin || p.sx > vw + margin ||
           p.sy < -margin || p.sy > vh + margin) continue;
-      if (d.kind === 'tree') {
-        // Soft shadow
-        ctx.fillStyle = 'rgba(30, 35, 50, 0.12)';
-        ctx.beginPath();
-        ctx.ellipse(p.sx + 1.5, p.sy + 4 * s, 9 * s * d.size, 3 * s * d.size, 0, 0, Math.PI * 2);
-        ctx.fill();
-        // Canopy
-        ctx.fillStyle = TREE_TINTS[d.tint % TREE_TINTS.length];
-        ctx.beginPath();
-        ctx.arc(p.sx, p.sy, 8 * s * d.size, 0, Math.PI * 2);
-        ctx.fill();
-        // Darker inner crescent hint of volume
-        ctx.fillStyle = 'rgba(60, 85, 55, 0.22)';
-        ctx.beginPath();
-        ctx.arc(p.sx + 2 * s * d.size, p.sy + 2 * s * d.size, 5.5 * s * d.size, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (d.kind === 'grass') {
-        // Grass tuft — three tiny dots in a cluster
-        ctx.fillStyle = GRASS_TINTS[d.tint % GRASS_TINTS.length];
-        const r = 1.8 * s * d.size;
-        ctx.beginPath();
-        ctx.arc(p.sx,        p.sy,         r, 0, Math.PI * 2);
-        ctx.arc(p.sx - 3 * s * d.size, p.sy + 1.5 * s * d.size, r, 0, Math.PI * 2);
-        ctx.arc(p.sx + 3 * s * d.size, p.sy + 1.5 * s * d.size, r, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        // Flower patch — bright centre petal with a soft green base
-        const r = 2.2 * s * d.size;
-        ctx.fillStyle = 'rgba(132, 165, 110, 0.4)';
-        ctx.beginPath();
-        ctx.arc(p.sx, p.sy, r * 1.4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = FLOWER_TINTS[d.tint % FLOWER_TINTS.length];
-        ctx.beginPath();
-        ctx.arc(p.sx,           p.sy,           r, 0, Math.PI * 2);
-        ctx.arc(p.sx - r * 1.3, p.sy,           r * 0.7, 0, Math.PI * 2);
-        ctx.arc(p.sx + r * 1.3, p.sy,           r * 0.7, 0, Math.PI * 2);
-        ctx.arc(p.sx,           p.sy - r * 1.3, r * 0.7, 0, Math.PI * 2);
-        ctx.fill();
-        // Tiny yellow centre dot on the main flower
-        ctx.fillStyle = 'rgba(250, 220, 120, 0.9)';
-        ctx.beginPath();
-        ctx.arc(p.sx, p.sy, r * 0.35, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      const r = 12 * s * d.size;
+      // Drop shadow — single offset solid blob.
+      ctx.fillStyle = COL.treeShadow;
+      ctx.beginPath();
+      ctx.arc(p.sx + r * 0.35, p.sy + r * 0.45, r, 0, Math.PI * 2);
+      ctx.fill();
+      // Canopy
+      ctx.fillStyle = COL.tree;
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 
@@ -2387,17 +2386,10 @@
       // Park bonus halo — soft green circle showing the +25% income radius.
       if (type === 'park') {
         const haloR = PARK_RADIUS * s;
-        ctx.fillStyle = 'rgba(120, 175, 90, 0.07)';
+        ctx.fillStyle = 'rgba(127, 185, 90, 0.10)';
         ctx.beginPath();
         ctx.arc(p.sx, p.sy, haloR, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = 'rgba(80, 130, 60, 0.18)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.arc(p.sx, p.sy, haloR, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
       }
 
       if (pressure > 0.02) {
@@ -2422,16 +2414,6 @@
         ctx.stroke();
       }
 
-      // Shadow — skip for house/shop (their plot already grounds them with
-      // its own subtle shadow). Mall keeps the broad shadow because its
-      // parking lot doesn't fully wrap the building.
-      if (type === 'mall') {
-        ctx.fillStyle = 'rgba(30, 35, 50, 0.18)';
-        ctx.beginPath();
-        ctx.ellipse(p.sx + 2, p.sy + 5 * s, 26 * s * sizeMul, 10 * s * sizeMul, 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
       if (type === 'house') drawHouse(p.sx, p.sy, s, b.id);
       else if (type === 'mall') drawMall(p.sx, p.sy, s);
       else if (type === 'park') drawPark(p.sx, p.sy, s, b.id);
@@ -2439,101 +2421,38 @@
     }
   }
 
-  // Park — a sizeable green block with several trees, a bench, a winding
-  // path, and a small flowerbed. The footprint is large enough that two
-  // adjacent parks read as one continuous "park zone" — the user asked
-  // for parks the size of four old ones.
+  // ===== v39 flat-design building art =====
+  // Mini-Motorways-inspired: each building is a big solid-colour rounded
+  // rectangle with a simple offset drop-shadow. Detail is conveyed by
+  // ONE small icon on top — not by texture / windows / trees.
+  // Helper: draw a flat block with shadow.
+  function flatBlock(cx, cy, w, h, fill, radius) {
+    // Drop shadow — single solid-colour offset, the signature MM look.
+    ctx.fillStyle = COL.blockShadow;
+    ctx.beginPath();
+    roundedRect(cx - w / 2 + 8, cy - h / 2 + 12, w, h, radius);
+    ctx.fill();
+    // Body
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    roundedRect(cx - w / 2, cy - h / 2, w, h, radius);
+    ctx.fill();
+  }
+
+  // Park — a big bright green rounded rect with a few solid tree dots
+  // on top. Adjacent parks tile into one continuous lawn because they
+  // share the same fill and corner radius.
   function drawPark(cx, cy, s, seed = 0) {
-    const plotR = 50 * s;
-    // Two-tone lawn — slightly darker outer ring, lighter centre — gives
-    // the park visible depth at zoom-out without extra geometry.
-    ctx.fillStyle = '#8db867';
-    ctx.beginPath();
-    roundedRect(cx - plotR, cy - plotR, plotR * 2, plotR * 2, plotR * 0.22);
-    ctx.fill();
-    ctx.fillStyle = '#a8cf83';
-    ctx.beginPath();
-    roundedRect(cx - plotR + 5 * s, cy - plotR + 5 * s,
-                plotR * 2 - 10 * s, plotR * 2 - 10 * s, plotR * 0.18);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(60, 80, 50, 0.4)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    roundedRect(cx - plotR, cy - plotR, plotR * 2, plotR * 2, plotR * 0.22);
-    ctx.stroke();
-    // Cream path winding through, wider than before so it reads at zoom.
-    ctx.strokeStyle = 'rgba(244, 234, 213, 0.78)';
-    ctx.lineWidth = 6 * s;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(cx - plotR + 8 * s, cy + 14 * s);
-    ctx.quadraticCurveTo(cx - 4 * s, cy - 4 * s, cx + 6 * s, cy - 8 * s);
-    ctx.quadraticCurveTo(cx + plotR * 0.4, cy - plotR * 0.2, cx + plotR - 8 * s, cy + 12 * s);
-    ctx.stroke();
-    // Pond on the lower-right — a tiny calm puddle adds variety without
-    // turning the park into a forest.
-    ctx.fillStyle = '#7fb6cc';
-    ctx.beginPath();
-    ctx.ellipse(cx + 22 * s, cy + 22 * s, 9 * s, 6 * s, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(40, 70, 90, 0.4)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    // Five trees scattered round the plot — bigger, fluffier than v32.
-    const trees = [
-      { dx: -28, dy: -22, r: 11 },
-      { dx:  -8, dy: -32, r:  9 },
-      { dx:  22, dy: -20, r: 12 },
-      { dx: -30, dy:  18, r: 10 },
-      { dx:  10, dy:   2, r:  8 }
-    ];
+    const size = 100 * s;
+    flatBlock(cx, cy, size, size, COL.park, 14 * s);
+    // Three solid tree dots, no shadows — keeps the silhouette clean.
+    const trees = [{ dx: -22, dy: -20 }, { dx: 22, dy: -16 }, { dx: -4, dy: 18 }];
     for (const t of trees) {
-      const tx = cx + t.dx * s, ty = cy + t.dy * s;
-      // Soft shadow grounds the canopy
-      ctx.fillStyle = 'rgba(30, 45, 25, 0.18)';
+      ctx.fillStyle = COL.parkDark;
       ctx.beginPath();
-      ctx.ellipse(tx + 1.2 * s, ty + t.r * s * 0.55, t.r * s, t.r * s * 0.4, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // Trunk
-      ctx.fillStyle = '#5a3a22';
-      ctx.fillRect(tx - 1.8 * s, ty + t.r * s * 0.4, 3.6 * s, t.r * s * 0.7);
-      // Canopy
-      ctx.fillStyle = '#3e7a38';
-      ctx.beginPath();
-      ctx.arc(tx, ty, t.r * s, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(30, 50, 30, 0.55)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      // Highlight
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-      ctx.beginPath();
-      ctx.arc(tx - t.r * s * 0.35, ty - t.r * s * 0.35, t.r * s * 0.45, 0, Math.PI * 2);
+      ctx.arc(cx + t.dx * s, cy + t.dy * s, 9 * s, 0, Math.PI * 2);
       ctx.fill();
     }
-    // Flower beds — two clusters of four flowers (red + yellow + pink + amber).
-    const FLOWERS = ['#e85871', '#f5d040', '#a850c8', '#e8a13a'];
-    const beds = [{ bx: 6, by: 24 }, { bx: -22, by: -2 }];
-    for (const bed of beds) {
-      for (let i = 0; i < 4; i++) {
-        const fx = cx + (bed.bx + (i - 1.5) * 4) * s;
-        const fy = cy + bed.by * s;
-        ctx.fillStyle = FLOWERS[i];
-        ctx.beginPath();
-        ctx.arc(fx, fy, 1.6 * s, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-    // Bench — slightly bigger to scale with the new plot.
-    ctx.fillStyle = '#6b4a2f';
-    ctx.fillRect(cx - 11 * s, cy + 32 * s, 22 * s, 3.5 * s);
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.5)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(cx - 11 * s, cy + 32 * s, 22 * s, 3.5 * s);
-    // Bench legs — small dark dashes underneath
-    ctx.fillStyle = 'rgba(50, 35, 20, 0.85)';
-    ctx.fillRect(cx - 9 * s,  cy + 35.5 * s, 1.5 * s, 3 * s);
-    ctx.fillRect(cx + 7.5 * s, cy + 35.5 * s, 1.5 * s, 3 * s);
   }
 
   // Brighter, more saturated body palette than v32 — the previous beige-only
@@ -2580,234 +2499,70 @@
   }
 
   function drawHouse(cx, cy, s, seed = 0) {
-    // v38 — bumped from plotR 35 to 46 so a house clearly outweighs a
-    // car visually (was looking 80s-tiny at zoom-out). Adjacent grid-step
-    // placements still blend their lawns into a continuous neighbourhood.
-    const plotR = 46 * s;
-    // Soft hedge-darker base under the lawn for depth.
-    ctx.fillStyle = '#9bbf6d';
+    const w = 78 * s, h = 78 * s;
+    // Solid block with offset shadow.
+    const fill = COL.house[seed % COL.house.length];
+    flatBlock(cx, cy, w, h, fill, 10 * s);
+    // Tiny "people" dots near the top of the block — Mini Motorways uses
+    // a 2-dot icon to mean "this is a house with 2 residents".
+    ctx.fillStyle = 'rgba(30, 35, 50, 0.7)';
+    const dotR = 4 * s;
     ctx.beginPath();
-    roundedRect(cx - plotR, cy - plotR, plotR * 2, plotR * 2, plotR * 0.22);
+    ctx.arc(cx - 9 * s, cy - h * 0.18, dotR, 0, Math.PI * 2);
+    ctx.arc(cx + 9 * s, cy - h * 0.18, dotR, 0, Math.PI * 2);
     ctx.fill();
-    // Bright lawn on top, slightly inset.
-    ctx.fillStyle = '#bfd690';
+    // Pin-marker silhouette on top of the block — small upside-down
+    // teardrop shape, signature MM look.
+    ctx.fillStyle = COL.houseRoof;
+    const px = cx, py = cy + h * 0.12;
+    const pr = 7 * s;
     ctx.beginPath();
-    roundedRect(cx - plotR + 2 * s, cy - plotR + 2 * s, plotR * 2 - 4 * s, plotR * 2 - 4 * s, plotR * 0.18);
+    ctx.arc(px, py, pr, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(60, 90, 50, 0.32)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Grass texture patches (varied tones) — seeded so each house looks
-    // unique but stable across reloads.
-    const grasses = ['#a8c97e', '#9fc275', '#b6cf85', '#92ba66'];
-    for (let i = 0; i < 7; i++) {
-      const px = cx + (seedHash(seed * 13 + i) - 0.5) * plotR * 1.6;
-      const py = cy + (seedHash(seed * 19 + i + 3) - 0.5) * plotR * 1.6;
-      if (Math.hypot(px - cx, py - cy) < 18 * s) continue;  // away from house body
-      ctx.fillStyle = grasses[i % grasses.length];
-      ctx.beginPath();
-      ctx.arc(px, py, plotR * 0.085, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Bright flower clusters — 4 colours, seeded positions. Buildings only
-    // get flowers in the corners of their plot so the eye focuses on the
-    // house body itself.
-    const flowers = ['#e8a857', '#e85871', '#a850c8', '#f5d040', '#ee85a5'];
-    for (let i = 0; i < 5; i++) {
-      const px = cx + (seedHash(seed * 23 + i + 7) - 0.5) * plotR * 1.7;
-      const py = cy + (seedHash(seed * 29 + i + 11) - 0.5) * plotR * 1.7;
-      if (Math.hypot(px - cx, py - cy) < 22 * s) continue;
-      ctx.fillStyle = flowers[i % flowers.length];
-      ctx.beginPath();
-      ctx.arc(px, py, plotR * 0.06, 0, Math.PI * 2);
-      ctx.fill();
-      // Tiny green stem
-      ctx.fillStyle = '#5b8a55';
-      ctx.fillRect(px - 0.5 * s, py + plotR * 0.06, 1 * s, 2 * s);
-    }
-
-    // Stone path from south plot edge up to the door — gives the house a
-    // sense of arrival.
-    ctx.strokeStyle = 'rgba(220, 210, 180, 0.85)';
-    ctx.lineWidth = 4 * s;
-    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(cx, cy + plotR - 2 * s);
-    ctx.lineTo(cx, cy + 16 * s);
-    ctx.stroke();
-
-    // Soft grounding shadow under the house body.
-    ctx.fillStyle = 'rgba(30, 35, 50, 0.14)';
-    ctx.beginPath();
-    ctx.ellipse(cx, cy + 16 * s, 22 * s, 5 * s, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    const w = 60 * s, h = 52 * s;
-    const bodyTop = cy - h / 2 + 11 * s;
-    const bodyBot = cy + h / 2;
-    const bodyCol = HOUSE_BODY[seed % HOUSE_BODY.length];
-    const roofCol = HOUSE_ROOF[seed % HOUSE_ROOF.length];
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.65)';
-    ctx.lineWidth = 1.5;
-
-    // Chimney first — rendered behind the roof.
-    const cxOff = 14 * s;
-    ctx.fillStyle = '#7a5032';
-    ctx.beginPath();
-    ctx.rect(cx + cxOff, cy - h / 2 - 12 * s, 7 * s, 12 * s);
-    ctx.fill(); ctx.stroke();
-
-    // Pitched roof — front face + a darker side face suggests volume.
-    ctx.fillStyle = roofCol;
-    ctx.beginPath();
-    ctx.moveTo(cx - w / 2 - 5 * s, bodyTop);
-    ctx.lineTo(cx, cy - h / 2 - 12 * s);
-    ctx.lineTo(cx + w / 2 + 5 * s, bodyTop);
-    ctx.closePath();
-    ctx.fill(); ctx.stroke();
-    // Right-side roof face — slightly darker, slight overlap of the apex.
-    ctx.fillStyle = shadeColor(roofCol, -0.18);
-    ctx.beginPath();
-    ctx.moveTo(cx + w / 2 + 5 * s, bodyTop);
-    ctx.lineTo(cx, cy - h / 2 - 12 * s);
-    ctx.lineTo(cx + w / 2 + 5 * s, bodyTop + 1 * s);
+    ctx.moveTo(px - pr, py);
+    ctx.lineTo(px + pr, py);
+    ctx.lineTo(px, py + pr * 1.4);
     ctx.closePath();
     ctx.fill();
-
-    // Body — flat front face with a subtle right-side shadow strip for depth.
-    ctx.fillStyle = bodyCol;
+    // White centre cut-out makes it a proper "pin" outline.
+    ctx.fillStyle = fill;
     ctx.beginPath();
-    roundedRect(cx - w / 2, bodyTop, w, bodyBot - bodyTop, 3 * s);
-    ctx.fill(); ctx.stroke();
-    // Right-side darker face — gives a "lit from the upper-left" feel.
-    ctx.fillStyle = shadeColor(bodyCol, -0.18);
-    ctx.beginPath();
-    roundedRect(cx + w / 2 - 6 * s, bodyTop, 6 * s, bodyBot - bodyTop, 3 * s);
+    ctx.arc(px, py, pr * 0.45, 0, Math.PI * 2);
     ctx.fill();
-
-    // Door
-    ctx.fillStyle = '#6b4a2f';
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.55)';
-    ctx.lineWidth = 1;
-    const dw = 12 * s, dh = 18 * s;
-    ctx.beginPath();
-    ctx.moveTo(cx - dw / 2, bodyBot);
-    ctx.lineTo(cx - dw / 2, bodyBot - dh + 2 * s);
-    ctx.quadraticCurveTo(cx - dw / 2, bodyBot - dh, cx - dw / 2 + 2 * s, bodyBot - dh);
-    ctx.lineTo(cx + dw / 2 - 2 * s, bodyBot - dh);
-    ctx.quadraticCurveTo(cx + dw / 2, bodyBot - dh, cx + dw / 2, bodyBot - dh + 2 * s);
-    ctx.lineTo(cx + dw / 2, bodyBot);
-    ctx.closePath();
-    ctx.fill(); ctx.stroke();
-    // Door knob
-    ctx.fillStyle = '#d4b04a';
-    ctx.beginPath();
-    ctx.arc(cx + dw / 2 - 2.5 * s, bodyBot - dh / 2, Math.max(0.9, 1.4 * s), 0, Math.PI * 2);
-    ctx.fill();
-
-    // Windows with cross mullions and warm glow tint.
-    const ww = 11 * s, wh = 11 * s;
-    const winY = bodyTop + 7 * s;
-    const wins = [ { x: cx - 21 * s }, { x: cx + 10 * s } ];
-    for (const win of wins) {
-      ctx.fillStyle = 'rgba(255, 240, 200, 0.95)';   // warm glow
-      ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.rect(win.x, winY, ww, wh);
-      ctx.fill(); ctx.stroke();
-      // Mullions
-      ctx.strokeStyle = 'rgba(30, 35, 50, 0.5)';
-      ctx.beginPath();
-      ctx.moveTo(win.x + ww / 2, winY); ctx.lineTo(win.x + ww / 2, winY + wh);
-      ctx.moveTo(win.x, winY + wh / 2); ctx.lineTo(win.x + ww, winY + wh / 2);
-      ctx.stroke();
-      // Window-sill flower box — small green box with red dots.
-      ctx.fillStyle = '#7a5230';
-      ctx.fillRect(win.x - 1 * s, winY + wh, ww + 2 * s, 2 * s);
-      ctx.fillStyle = '#e85871';
-      ctx.beginPath();
-      ctx.arc(win.x + 2 * s, winY + wh + 1 * s, 1 * s, 0, Math.PI * 2);
-      ctx.arc(win.x + ww - 2 * s, winY + wh + 1 * s, 1 * s, 0, Math.PI * 2);
-      ctx.fill();
-    }
   }
 
   function drawShop(cx, cy, s, seed = 0) {
-    // Plaza plot — slightly warmer / sandier than a house garden so shops
-    // read as "commercial". Same footprint, so placement intuitions
-    // transfer between building types.
-    drawPlot(cx, cy, 40 * s, '#dcd1b3',
-             ['#a89880', '#8a7d65', '#bfa988', '#7d8a72'], seed + 100);
-
-    const w = 64 * s, h = 58 * s;
-    const awning = SHOP_AWNING[seed % SHOP_AWNING.length];
-    const awningDark = shadeColor(awning, -0.15);
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
-    ctx.lineWidth = 1.5;
-
-    // Body
-    ctx.fillStyle = '#c7a88c';
+    const w = 92 * s, h = 92 * s;
+    const fill = COL.shop[seed % COL.shop.length];
+    flatBlock(cx, cy, w, h, fill, 12 * s);
+    // Three "customer" dots arranged across the top — Mini Motorways uses
+    // 3-pin clusters to mean "this destination has 3 unmet trips".
+    ctx.fillStyle = 'rgba(30, 35, 50, 0.7)';
+    const dotR = 4.5 * s;
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.arc(cx + (i - 1) * 12 * s, cy - h * 0.20, dotR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Single map-pin marker centred below the dots — same icon language
+    // as House but white-cored to read as "this is a destination."
+    ctx.fillStyle = 'rgba(255, 250, 238, 0.95)';
+    const px = cx, py = cy + h * 0.10;
+    const pr = 9 * s;
     ctx.beginPath();
-    roundedRect(cx - w / 2, cy - h / 2, w, h, 5 * s);
-    ctx.fill(); ctx.stroke();
-
-    // Sign band (dark slate top)
-    ctx.fillStyle = 'rgba(30, 35, 50, 0.42)';
-    ctx.fillRect(cx - w / 2, cy - h / 2, w, 8 * s);
-    // Tiny white "SHOP" dot pattern on the sign band
-    ctx.fillStyle = 'rgba(255, 250, 238, 0.85)';
-    for (let i = 0; i < 4; i++) {
-      ctx.fillRect(cx - 10 * s + i * 6 * s, cy - h / 2 + 3 * s, 3 * s, 3 * s);
-    }
-
-    // Awning — striped fabric
-    const ay = cy - h / 2 + 8 * s, ah = 7 * s;
-    ctx.fillStyle = awning;
-    ctx.fillRect(cx - w / 2, ay, w, ah);
-    // Stripes
-    ctx.fillStyle = awningDark;
-    const stripeW = w / 5;
-    for (let i = 0; i < 5; i += 2) {
-      ctx.fillRect(cx - w / 2 + i * stripeW, ay, stripeW, ah);
-    }
-    // Zigzag trim under the awning
-    ctx.beginPath();
-    ctx.moveTo(cx - w / 2, ay + ah);
-    const zn = 7;
-    for (let i = 0; i < zn; i++) {
-      const x0 = cx - w / 2 + (w / zn) * i;
-      const x1 = cx - w / 2 + (w / zn) * (i + 1);
-      ctx.lineTo((x0 + x1) / 2, ay + ah + 3.5 * s);
-      ctx.lineTo(x1, ay + ah);
-    }
-    ctx.fillStyle = awning;
+    ctx.arc(px, py, pr, 0, Math.PI * 2);
     ctx.fill();
-
-    // Big shopfront window with a mullion + door.
-    const winY = ay + ah + 6 * s, winH = cy + h / 2 - winY - 2 * s;
-    const winX = cx - w / 2 + 4 * s, winW = w - 8 * s;
-    ctx.fillStyle = 'rgba(220, 235, 250, 0.92)';
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.rect(winX, winY, winW, winH); ctx.fill(); ctx.stroke();
-    // Door (right third)
-    const dw = winW * 0.3, dh = winH;
-    const dx = winX + winW - dw;
-    ctx.fillStyle = shadeColor(awning, -0.2);
-    ctx.fillRect(dx, winY, dw, dh);
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
-    ctx.strokeRect(dx, winY, dw, dh);
-    // Window mullions (2 vertical lines in the glass portion)
-    const glassW = winW - dw;
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.4)';
-    ctx.lineWidth = 1;
-    for (let i = 1; i < 3; i++) {
-      const x = winX + (glassW / 3) * i;
-      ctx.beginPath(); ctx.moveTo(x, winY); ctx.lineTo(x, winY + winH); ctx.stroke();
-    }
+    ctx.beginPath();
+    ctx.moveTo(px - pr, py);
+    ctx.lineTo(px + pr, py);
+    ctx.lineTo(px, py + pr * 1.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.arc(px, py, pr * 0.42, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   // Helper — darken/lighten a hex colour by a factor (-1..1).
@@ -2822,90 +2577,37 @@
   }
 
   function drawMall(cx, cy, s) {
-    const w = 110 * s, h = 76 * s;
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.65)';
-    ctx.lineWidth = 1.5;
-
-    // Parking-lot hint — light band under the building.
-    ctx.fillStyle = 'rgba(150, 150, 160, 0.38)';
+    const w = 130 * s, h = 130 * s;
+    flatBlock(cx, cy, w, h, COL.mall, 14 * s);
+    // Five customer dots — mall is a high-capacity destination.
+    ctx.fillStyle = 'rgba(255, 250, 238, 0.92)';
+    const dotR = 5 * s;
+    for (let row = 0; row < 2; row++) {
+      const count = row === 0 ? 3 : 2;
+      const yOff = -h * 0.22 + row * 14 * s;
+      for (let i = 0; i < count; i++) {
+        ctx.beginPath();
+        ctx.arc(cx + (i - (count - 1) / 2) * 14 * s, cy + yOff, dotR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // Big white pin badge — make it clear this is the headline destination.
+    ctx.fillStyle = 'rgba(255, 250, 238, 0.95)';
+    const px = cx, py = cy + h * 0.14;
+    const pr = 14 * s;
     ctx.beginPath();
-    roundedRect(cx - w / 2 - 5 * s, cy - h / 2 + 2 * s, w + 10 * s, h + 5 * s, 6 * s);
+    ctx.arc(px, py, pr, 0, Math.PI * 2);
     ctx.fill();
-    // Parking stripes
-    ctx.strokeStyle = 'rgba(255, 250, 238, 0.75)';
-    ctx.lineWidth = 1;
-    const stripes = 7;
-    for (let i = 0; i < stripes; i++) {
-      const x = cx - w / 2 - 3 * s + (w + 6 * s) * i / (stripes - 1);
-      ctx.beginPath();
-      ctx.moveTo(x, cy + h / 2 + 1 * s);
-      ctx.lineTo(x, cy + h / 2 + 6 * s);
-      ctx.stroke();
-    }
-
-    // Stepped roof (back wing — taller) rendered first, behind main body.
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.65)';
-    ctx.lineWidth = 1.5;
-    ctx.fillStyle = '#9ba6b8';
     ctx.beginPath();
-    roundedRect(cx - w / 2 + 6 * s, cy - h / 2 - 8 * s, w - 12 * s, 18 * s, 3 * s);
-    ctx.fill(); ctx.stroke();
-
-    // Main body
-    ctx.fillStyle = '#b0b8c4';
+    ctx.moveTo(px - pr, py);
+    ctx.lineTo(px + pr, py);
+    ctx.lineTo(px, py + pr * 1.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = COL.mall;
     ctx.beginPath();
-    roundedRect(cx - w / 2, cy - h / 2 + 4 * s, w, h - 4 * s, 4 * s);
-    ctx.fill(); ctx.stroke();
-
-    // Darker sign band across the top of the main body
-    ctx.fillStyle = 'rgba(30, 35, 50, 0.55)';
-    ctx.fillRect(cx - w / 2, cy - h / 2 + 4 * s, w, 9 * s);
-
-    // Big glass storefront
-    const glassY = cy - h / 2 + 17 * s;
-    const glassH = h - 24 * s;
-    const glassX = cx - w / 2 + 5 * s;
-    const glassW = w - 10 * s;
-    ctx.fillStyle = 'rgba(200, 230, 245, 0.92)';
-    ctx.fillRect(glassX, glassY, glassW, glassH);
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.6)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(glassX, glassY, glassW, glassH);
-    // Vertical mullions
-    ctx.strokeStyle = 'rgba(30, 35, 50, 0.4)';
-    for (let i = 1; i < 6; i++) {
-      const x = glassX + (glassW / 6) * i;
-      ctx.beginPath();
-      ctx.moveTo(x, glassY); ctx.lineTo(x, glassY + glassH);
-      ctx.stroke();
-    }
-    // Horizontal mullion mid-height
-    ctx.beginPath();
-    ctx.moveTo(glassX, glassY + glassH / 2);
-    ctx.lineTo(glassX + glassW, glassY + glassH / 2);
-    ctx.stroke();
-
-    // Central entrance — double doors, darker
-    const doorW = glassW * 0.28;
-    const doorH = glassH * 0.55;
-    ctx.fillStyle = '#3c4256';
-    ctx.fillRect(cx - doorW / 2, glassY + glassH - doorH, doorW, doorH);
-    ctx.strokeStyle = 'rgba(255, 250, 238, 0.6)';
-    ctx.beginPath();
-    ctx.moveTo(cx, glassY + glassH - doorH);
-    ctx.lineTo(cx, glassY + glassH);
-    ctx.stroke();
-
-    // Entrance canopy — small flat awning over the doors
-    ctx.fillStyle = '#6c7a8e';
-    ctx.fillRect(cx - doorW / 2 - 3 * s, glassY + glassH - doorH - 3 * s, doorW + 6 * s, 3 * s);
-
-    // "MALL" sign on the top band
-    ctx.fillStyle = 'rgba(255, 250, 238, 0.9)';
-    ctx.font = `bold ${Math.max(9, 10 * s)}px -apple-system, "SF Pro Rounded", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('MALL', cx, cy - h / 2 + 8.5 * s);
+    ctx.arc(px, py, pr * 0.42, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   // Per-side pastel colour for entry gates — makes each direction memorable.
@@ -2982,12 +2684,14 @@
   }
 
   function drawCars() {
+    // v39 flat-design pass — Mini-Motorways-style: just a small solid
+    // rounded rectangle with a soft drop shadow. No windshield / wheels /
+    // headlights — those read as 80s detail. Keeping the colour mix so
+    // a row of cars still reads as varied traffic.
     const scale = state.view.scale;
-    const len = Math.max(20, 24 * scale);
-    const wid = Math.max(11, 13 * scale);
-    const corner = wid * 0.35;
-    // Viewport cull — skip cars completely off-screen. Big perf win at
-    // scale: a city with hundreds of cars only renders the visible ones.
+    const len = Math.max(16, 20 * scale);
+    const wid = Math.max(9, 11 * scale);
+    const corner = wid * 0.45;
     const margin = 40;
     const vw = state.view.w, vh = state.view.h;
 
@@ -3003,37 +2707,16 @@
       ctx.translate(s.sx, s.sy);
       ctx.rotate(angle);
 
-      // Shadow offset down-right
-      ctx.fillStyle = 'rgba(20, 25, 40, 0.28)';
+      // Soft offset shadow.
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
       ctx.beginPath();
       roundedRect(-len / 2 + 1.5, -wid / 2 + 2.5, len, wid, corner);
       ctx.fill();
 
-      // Body
+      // Body — pure solid colour, no outline, no windshield.
       ctx.fillStyle = car.color;
       ctx.beginPath();
       roundedRect(-len / 2, -wid / 2, len, wid, corner);
-      ctx.fill();
-      // Subtle dark outline
-      ctx.strokeStyle = 'rgba(20, 25, 40, 0.45)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      // Windshield (front ~30% of body, lighter)
-      const wsLen = len * 0.30;
-      const wsPad = wid * 0.22;
-      ctx.fillStyle = 'rgba(255, 250, 238, 0.42)';
-      ctx.beginPath();
-      roundedRect(len * 0.08, -wid / 2 + wsPad, wsLen, wid - wsPad * 2, 1.5);
-      ctx.fill();
-
-      // Headlight hint — tiny dots at the front corners
-      ctx.fillStyle = 'rgba(255, 240, 200, 0.85)';
-      ctx.beginPath();
-      ctx.arc(len / 2 - 1.2, -wid / 2 + 2.5, 1.4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(len / 2 - 1.2,  wid / 2 - 2.5, 1.4, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.restore();
