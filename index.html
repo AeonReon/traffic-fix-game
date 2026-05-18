@@ -47,6 +47,7 @@
         <div class="mode-card mode-game" data-mode="game">
           <div class="mode-title">Game Mode</div>
           <p class="mode-blurb">Start with <b>$200</b>. Buy roads &amp; buildings. Cars bring people who spend money. Push the city as far as you can — too much traffic and it gridlocks.</p>
+          <div class="splash-records hidden"></div>
           <div class="mode-actions">
             <button class="primary mode-start" data-mode="game">Start</button>
             <button class="secondary mode-fresh hidden" data-mode="game">Start fresh</button>
@@ -211,6 +212,7 @@
       <p class="blurb" id="go-message">Your city was overwhelmed by traffic.</p>
       <div class="big-number"><span id="go-score">0</span><span class="u" id="go-score-unit">cars delivered</span></div>
       <ul class="go-stats" id="go-stats"></ul>
+      <div id="go-records" class="go-records"></div>
       <div class="splash-buttons">
         <button id="btn-retry" class="primary">Try again</button>
         <button id="btn-back-to-menu" class="secondary">Main menu</button>
@@ -225,6 +227,9 @@
       <span class="targets-chevron">▾</span>
     </button>
     <div class="targets-body">
+      <div class="targets-section-label">⚡ Speedrun</div>
+      <div id="targets-speed" class="targets-speed"></div>
+      <div class="targets-section-label">🎯 Goals</div>
       <div class="target" data-target="earn">
         <div class="target-row">
           <span class="target-icon">💰</span>

@@ -119,13 +119,18 @@
 
   // Build version — bumped on every ship; shown in the corner pill so the
   // user can see at a glance whether the page reloaded with a new build.
-  const VERSION = 'v39';
+  const VERSION = 'v41';
 
   // Save / load — per mode. Legacy key stays the sandbox save so existing
   // saves keep working without migration.
   const SAVE_KEY_SANDBOX = 'traffic-flow:v1';
   const SAVE_KEY_GAME = 'traffic-flow:game:v1';
   const SAVE_VERSION = 1;
+
+  // Personal records — survives "Start fresh" and any single run. Tracks the
+  // all-time peak $ ever earned in one run (the number you're trying to beat)
+  // and fastest in-run time to each speedrun milestone.
+  const RECORDS_KEY = 'traffic-flow:records:v1';
 
   // Slow ramp — in any mode, demand starts low and ramps up to full over
   // RAMP_TIME seconds so the city has time to breathe before things get hot.
@@ -246,8 +251,13 @@
     }
   ];
 
-  // Cash bonus per tier (matches array index). Bigger goals → bigger payout.
-  const TIER_BONUSES = [100, 250, 1000, 5000, 25000];
+  // Cash bonus per tier (matches array index). Bigger goals → bigger payout,
+  // but late-tier bonuses are flattened — used to be [100, 250, 1000, 5000,
+  // 25000] which gave the player a cash-shock at the top tiers (sudden
+  // $25k jump on a $10k bankroll felt weird and disconnected from the
+  // gradual income loop). The real reward is supposed to be more buildings
+  // earning more — not a one-shot pile.
+  const TIER_BONUSES = [100, 250, 750, 2000, 6000];
 
   // Helpers — given target def + current tier, return the active goal value
   // and threshold (if income).
@@ -261,6 +271,95 @@
   function targetMaxedOut(def, tier) {
     return tier >= def.tiers.length;
   }
+
+  // ================================================================
+  // Speedrun records — personal leaderboard for game mode
+  // ================================================================
+  // The "fun loop" beyond the per-run goals: a stable, scrolling target the
+  // player tries to beat across runs. Two records:
+  //   1. Peak earned ever in one run (the big number to defeat).
+  //   2. Fastest in-run time to reach each of 5 adaptive milestones.
+  // The 5 milestones rescale as the player's peak grows, so we never list
+  // 20 numbers — always 5, sized to where the player actually plays.
+  function niceRound(n) {
+    if (n < 1000) return Math.max(100, Math.round(n / 100) * 100);
+    if (n < 10000) return Math.round(n / 500) * 500;
+    if (n < 50000) return Math.round(n / 1000) * 1000;
+    if (n < 250000) return Math.round(n / 5000) * 5000;
+    return Math.round(n / 10000) * 10000;
+  }
+
+  function computeMilestones(peakEarned) {
+    // Min anchor of $5k means even a brand-new player sees a real ladder.
+    const anchor = Math.max(peakEarned || 0, 5000);
+    const raw = [0.2, 0.4, 0.6, 0.8, 1.0].map(p => niceRound(anchor * p));
+    const out = [];
+    for (const v of raw) {
+      if (out.length === 0 || v > out[out.length - 1]) out.push(v);
+    }
+    return out;
+  }
+
+  function formatRunTime(sec) {
+    if (sec == null || !isFinite(sec)) return '—';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}m ${s.toString().padStart(2, '0')}s`;
+  }
+
+  function formatMoney(n) {
+    if (n >= 1000) {
+      const k = n / 1000;
+      return (k % 1 === 0 ? k.toFixed(0) : k.toFixed(1)) + 'k';
+    }
+    return String(n);
+  }
+
+  const Records = {
+    data: { peakEarned: 0, speedRecords: {} },
+    load() {
+      try {
+        const raw = localStorage.getItem(RECORDS_KEY);
+        if (raw) {
+          const d = JSON.parse(raw);
+          this.data.peakEarned = d.peakEarned || 0;
+          this.data.speedRecords = d.speedRecords || {};
+        }
+      } catch (_) {}
+    },
+    save() {
+      try { localStorage.setItem(RECORDS_KEY, JSON.stringify(this.data)); } catch (_) {}
+    },
+    milestones() { return computeMilestones(this.data.peakEarned); },
+    fastestMilestone() {
+      // The single best speedrun row to advertise on the splash — the
+      // largest milestone the player has ever hit, with its time.
+      let best = null;
+      for (const [m, t] of Object.entries(this.data.speedRecords)) {
+        const mv = +m;
+        if (!best || mv > best.milestone) best = { milestone: mv, time: t };
+      }
+      return best;
+    },
+    recordCrossing(milestone, timeSec) {
+      const prev = this.data.speedRecords[milestone];
+      if (prev == null || timeSec < prev) {
+        this.data.speedRecords[milestone] = timeSec;
+        this.save();
+        return { isNew: prev == null, beat: prev };
+      }
+      return null;
+    },
+    recordPeak(earned) {
+      if (earned > this.data.peakEarned) {
+        const prev = this.data.peakEarned;
+        this.data.peakEarned = earned;
+        this.save();
+        return { prev };
+      }
+      return null;
+    }
+  };
 
   function gridSteps(lenPx) {
     return Math.max(1, Math.round(lenPx / GRID));
@@ -1689,6 +1788,7 @@
       }
       // Target-hit detection — cheap, runs every step but reads small data.
       checkTargets();
+      checkSpeedMilestones();
     }
 
     // Sample the delivery-per-minute rate once per sim-second for the
@@ -3342,6 +3442,10 @@
     state._runBaselineMoney = state.bestMoney;
     state._brokeScoreRecord = false;
     state._brokeMoneyRecord = false;
+    // Speedrun milestone crossings for THIS run. Each milestone records the
+    // first sim-time the player crosses it, so we don't overwrite a clean
+    // early cross with a later re-read of the same value.
+    state._milestoneHitsThisRun = new Set();
 
     for (const ep of LEVEL.entries) {
       const node = makeNode(ep.x, ep.y, { entry: ep.id });
@@ -3415,6 +3519,31 @@
     }
   }
 
+  // Speedrun milestone detector — game mode only. When totalEarned first
+  // crosses an active milestone this run, stamp the in-run time and (if it
+  // beats the stored record) save + toast. The 5 milestones are derived
+  // from the player's all-time peak so they keep scaling as they get better.
+  function checkSpeedMilestones() {
+    if (!isGameMode() || !state.started || state.over) return;
+    if (!state._milestoneHitsThisRun) state._milestoneHitsThisRun = new Set();
+    const milestones = Records.milestones();
+    for (const m of milestones) {
+      if (state.totalEarned < m) break;
+      if (state._milestoneHitsThisRun.has(m)) continue;
+      state._milestoneHitsThisRun.add(m);
+      const t = state.time;
+      const result = Records.recordCrossing(m, t);
+      if (result) {
+        const timeStr = formatRunTime(t);
+        if (result.beat != null) {
+          toast(`⚡ Speedrun! $${formatMoney(m)} in ${timeStr} (was ${formatRunTime(result.beat)})`, 2800);
+        } else {
+          toast(`⚡ First time! $${formatMoney(m)} in ${timeStr}`, 2800);
+        }
+      }
+    }
+  }
+
   // Target progress + hit detection. Tiered — when you cross the current
   // tier's goal, the tier increments and the next goal slots in. Each tier
   // hit fires a toast + cash bonus + sparkle burst.
@@ -3466,16 +3595,53 @@
     panel.classList.remove('hidden');
     panel.classList.toggle('collapsed', !!state.targetsCollapsed);
 
-    // Header summary — "Goals · 1/3 maxed" when there's at least one max.
+    // Speedrun section — the 5 milestone rows above the tiered goals. Each
+    // row: amount target, live progress bar (totalEarned vs milestone), and
+    // either the personal-best time or a live "on pace" hint. Rendered as
+    // innerHTML each tick — 5 rows is cheap and saves stateful DOM diffing.
+    const speedEl = document.getElementById('targets-speed');
+    const milestones = Records.milestones();
+    let speedHits = 0;
+    if (speedEl) {
+      const rows = milestones.map(m => {
+        const rec = Records.data.speedRecords[m];
+        const hitThisRun = state._milestoneHitsThisRun && state._milestoneHitsThisRun.has(m);
+        if (hitThisRun) speedHits++;
+        const pct = Math.min(100, (state.totalEarned / m) * 100);
+        let timeCell;
+        if (hitThisRun) {
+          timeCell = `<span class="speed-time hit">${formatRunTime(rec)}</span>`;
+        } else if (rec != null) {
+          const onPace = state.totalEarned > 0 && state.time < rec;
+          timeCell = `<span class="speed-time${onPace ? ' onpace' : ''}">${formatRunTime(rec)}${onPace ? ' ⚡' : ''}</span>`;
+        } else {
+          timeCell = `<span class="speed-time unset">— new</span>`;
+        }
+        const cls = `speed-row${hitThisRun ? ' hit' : ''}`;
+        return `
+          <div class="${cls}">
+            <div class="speed-head">
+              <span class="speed-amount">$${formatMoney(m)}</span>
+              ${timeCell}
+            </div>
+            <div class="speed-bar"><div class="speed-fill" style="width:${pct.toFixed(0)}%"></div></div>
+          </div>
+        `;
+      }).join('');
+      speedEl.innerHTML = rows;
+    }
+
+    // Header summary — speed hits this run + tier ascents across goals.
     const hdr = panel.querySelector('.targets-summary');
     if (hdr) {
       const maxed = TARGET_DEFS.reduce(
         (n, d) => n + (targetMaxedOut(d, state.targetTiers[d.id] || 0) ? 1 : 0), 0);
       const ascended = TARGET_DEFS.reduce(
         (n, d) => n + Math.min(d.tiers.length, state.targetTiers[d.id] || 0), 0);
-      hdr.textContent = ascended === 0
-        ? '0 hit'
-        : `${ascended} hit${maxed ? ` · ${maxed} maxed` : ''}`;
+      const parts = [];
+      if (speedHits > 0) parts.push(`⚡ ${speedHits}/${milestones.length}`);
+      if (ascended > 0) parts.push(`${ascended} hit${maxed ? ` · ${maxed} maxed` : ''}`);
+      hdr.textContent = parts.length ? parts.join(' · ') : '0 hit';
     }
 
     for (const def of TARGET_DEFS) {
@@ -3631,6 +3797,10 @@
 
     if (state.totalEarned > state.bestMoney) state.bestMoney = state.totalEarned;
     if (state.time > state.bestSurvived) state.bestSurvived = state.time;
+    // Final-cross sweep — sandbox spikes that pushed totalEarned over a
+    // milestone in the same tick the city collapsed should still register.
+    checkSpeedMilestones();
+    const peakResult = Records.recordPeak(state.totalEarned);
     scheduleSave();
 
     document.getElementById('go-title').textContent = 'City Collapsed!';
@@ -3638,9 +3808,7 @@
     document.getElementById('go-score').textContent = '$' + state.totalEarned;
     document.getElementById('go-score-unit').textContent = 'earned';
 
-    const mins = Math.floor(state.time / 60);
-    const secs = Math.floor(state.time % 60);
-    const survived = `${mins}m ${secs.toString().padStart(2, '0')}s`;
+    const survived = formatRunTime(state.time);
 
     const stats = document.getElementById('go-stats');
     if (stats) {
@@ -3649,10 +3817,36 @@
         <li><span>Peak people</span><b>${state.peakPeople}</b></li>
         <li><span>Deliveries</span><b>${state.delivered}</b></li>
         <li><span>Visits</span><b>${state.visits}</b></li>
-        <li><span>Best earned</span><b>$${state.bestMoney}</b></li>
-        <li><span>Longest run</span><b>${Math.floor(state.bestSurvived/60)}m ${(Math.floor(state.bestSurvived)%60).toString().padStart(2,'0')}s</b></li>
+        <li><span>Longest run</span><b>${formatRunTime(state.bestSurvived)}</b></li>
       `;
     }
+
+    // Speedrun records block — the headline number to beat next run, plus
+    // the 5-row ladder of fastest times to each milestone. New crossings
+    // this run are highlighted so the win is visible at a glance.
+    const recordsEl = document.getElementById('go-records');
+    if (recordsEl) {
+      const peak = Records.data.peakEarned;
+      const peakNew = !!peakResult;
+      const milestones = Records.milestones();
+      const rows = milestones.map(m => {
+        const rec = Records.data.speedRecords[m];
+        const hitThisRun = state._milestoneHitsThisRun && state._milestoneHitsThisRun.has(m);
+        const cls = hitThisRun ? 'go-rec-row hit' : 'go-rec-row';
+        const time = rec != null ? formatRunTime(rec) : '—';
+        return `<div class="${cls}"><span class="go-rec-amount">$${formatMoney(m)}</span><span class="go-rec-time">${time}</span>${hitThisRun ? '<span class="go-rec-badge">RUN</span>' : ''}</div>`;
+      }).join('');
+      recordsEl.innerHTML = `
+        <div class="go-rec-peak ${peakNew ? 'new' : ''}">
+          <div class="go-rec-peak-label">${peakNew ? '🏆 NEW PEAK' : 'All-time peak'}</div>
+          <div class="go-rec-peak-value">$${peak.toLocaleString()}</div>
+          ${peakNew && peakResult.prev > 0 ? `<div class="go-rec-peak-prev">beat $${peakResult.prev.toLocaleString()}</div>` : ''}
+        </div>
+        <div class="go-rec-title">⚡ Speedrun records</div>
+        <div class="go-rec-list">${rows}</div>
+      `;
+    }
+
     document.getElementById('gameover').classList.remove('hidden');
   }
   function syncMuteButton() {
@@ -3967,12 +4161,35 @@
       if (startBtn) startBtn.textContent = has ? 'Continue' : 'Start';
       if (freshBtn) freshBtn.classList.toggle('hidden', !has);
     });
+
+    // Game Mode card — show personal records so the player sees the number
+    // to beat BEFORE they hit Start. Empty on first run; fills in once they
+    // crash with money in the bank.
+    const recBox = document.querySelector('.mode-game .splash-records');
+    if (recBox) {
+      const peak = Records.data.peakEarned;
+      const fastest = Records.fastestMilestone();
+      if (peak > 0 || fastest) {
+        const peakLine = peak > 0
+          ? `<div class="splash-rec-peak">🏆 Peak <b>$${peak.toLocaleString()}</b></div>`
+          : '';
+        const fastLine = fastest
+          ? `<div class="splash-rec-fast">⚡ $${formatMoney(fastest.milestone)} in <b>${formatRunTime(fastest.time)}</b></div>`
+          : '';
+        recBox.innerHTML = peakLine + fastLine;
+        recBox.classList.remove('hidden');
+      } else {
+        recBox.innerHTML = '';
+        recBox.classList.add('hidden');
+      }
+    }
   }
 
   (() => {
     canvas = document.getElementById('stage');
     ctx = canvas.getContext('2d');
     resizeCanvas();
+    Records.load();
     buildLevel();
     generateDecor();
     generateStars();
